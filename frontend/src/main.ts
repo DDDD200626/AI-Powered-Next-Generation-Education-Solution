@@ -2,78 +2,48 @@ import "./style.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
-/** 세션 스토리지 — 탭 닫으면 삭제. 서버에 키가 없을 때만 백엔드로 헤더 전송. */
-const OPENAI_SESSION_KEY = "classpulse_openai_key";
-
-function getStoredOpenAIKey(): string {
-  try {
-    return (sessionStorage.getItem(OPENAI_SESSION_KEY) || "").trim();
-  } catch {
-    return "";
-  }
-}
-
-function setStoredOpenAIKey(value: string): void {
-  try {
-    if (value) sessionStorage.setItem(OPENAI_SESSION_KEY, value);
-    else sessionStorage.removeItem(OPENAI_SESSION_KEY);
-  } catch {
-    /* 사생활 보호 모드 등 */
-  }
-}
-
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-function errDetail(data: unknown): string {
-  if (!data || typeof data !== "object") return "요청 실패";
-  const d = data as { detail?: unknown };
-  if (d.detail == null) return "요청 실패";
-  if (typeof d.detail === "string") return d.detail;
-  if (Array.isArray(d.detail)) return JSON.stringify(d.detail);
-  return String(d.detail);
+interface MemberForm {
+  name: string;
+  role: string;
+  commits: string;
+  pull_requests: string;
+  lines_changed: string;
+  tasks_completed: string;
+  meetings_attended: string;
+  self_report: string;
+  peer_notes: string;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const clientKey = getStoredOpenAIKey();
-  if (clientKey) headers["X-ClassPulse-OpenAI-Key"] = clientKey;
-
-  const r = await fetch(apiUrl(path), {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
-  const data = (await r.json().catch(() => ({}))) as T & { detail?: unknown };
-  if (!r.ok) throw new Error(errDetail(data));
-  return data;
+interface HealthJson {
+  status?: string;
+  openai_configured?: boolean;
 }
 
-function $(sel: string): HTMLElement {
-  const el = document.querySelector(sel);
-  if (!el) throw new Error(`Missing element: ${sel}`);
-  return el as HTMLElement;
+interface DimensionScores {
+  technical: number;
+  collaboration: number;
+  initiative: number;
 }
 
-function button(sel: string): HTMLButtonElement {
-  const el = document.querySelector(sel);
-  if (!(el instanceof HTMLButtonElement)) throw new Error(`Not a button: ${sel}`);
-  return el;
+interface MemberEvaluation {
+  name: string;
+  role: string;
+  contribution_index: number;
+  dimensions: DimensionScores;
+  evidence_summary: string;
+  caveats: string;
 }
 
-/** 중복 클릭 방지 + 로딩 표시 */
-async function withBusy(btnEl: HTMLButtonElement, task: () => Promise<void>): Promise<void> {
-  if (btnEl.disabled) return;
-  const label = btnEl.textContent;
-  btnEl.disabled = true;
-  btnEl.textContent = "처리 중…";
-  try {
-    await task();
-  } finally {
-    btnEl.disabled = false;
-    btnEl.textContent = label;
-  }
+interface EvaluateResponse {
+  mode: string;
+  project_summary: string;
+  fairness_notes: string;
+  members: MemberEvaluation[];
+  disclaimer: string;
 }
 
 function escapeHtml(s: string): string {
@@ -84,318 +54,311 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function renderTable(container: HTMLElement, columns: string[], rows: Record<string, unknown>[]) {
-  if (!rows.length) {
-    container.innerHTML = "<p class='note'>데이터가 없습니다.</p>";
-    return;
-  }
-  const th = columns.map((c) => `<th>${escapeHtml(String(c))}</th>`).join("");
-  const tr = rows
-    .map(
-      (row) =>
-        "<tr>" +
-        columns.map((c) => `<td>${escapeHtml(String(row[c] ?? ""))}</td>`).join("") +
-        "</tr>"
-    )
-    .join("");
-  container.innerHTML = `<table class="data"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`;
+function emptyMember(): MemberForm {
+  return {
+    name: "",
+    role: "",
+    commits: "",
+    pull_requests: "",
+    lines_changed: "",
+    tasks_completed: "",
+    meetings_attended: "",
+    self_report: "",
+    peer_notes: "",
+  };
 }
 
-interface Hit {
-  chunk_id: number;
-  source: string;
-  text: string;
-  score?: number;
+const state: {
+  project_name: string;
+  project_description: string;
+  evaluation_criteria: string;
+  members: MemberForm[];
+  result: EvaluateResponse | null;
+  loading: boolean;
+  error: string | null;
+  health: HealthJson | null;
+} = {
+  project_name: "",
+  project_description: "",
+  evaluation_criteria: "",
+  members: [emptyMember(), emptyMember()],
+  result: null,
+  loading: false,
+  error: null,
+  health: null,
+};
+
+function parseOptInt(s: string): number | null {
+  const t = s.trim();
+  if (!t) return null;
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
-function renderHits(container: HTMLElement, hits: Hit[] | undefined) {
-  container.innerHTML = "";
-  if (!hits?.length) {
-    container.innerHTML = "<p class='note'>근거가 없습니다.</p>";
-    return;
-  }
-  for (const h of hits) {
-    const det = document.createElement("details");
-    det.className = "hit";
-    det.innerHTML =
-      `<summary>[${h.chunk_id}] ${escapeHtml(h.source)} · 유사도 ` +
-      (h.score != null ? Number(h.score).toFixed(3) : "") +
-      `</summary><pre>${escapeHtml(h.text)}</pre>`;
-    container.appendChild(det);
-  }
-}
-
-function showTab(id: string) {
-  document.querySelectorAll(".tab").forEach((t) => {
-    const b = t as HTMLButtonElement;
-    const on = b.dataset.tab === id;
-    b.classList.toggle("active", on);
-    b.setAttribute("aria-selected", on ? "true" : "false");
-  });
-  document.querySelectorAll(".panel").forEach((p) => {
-    const on = p.id === `panel-${id}`;
-    p.classList.toggle("active", on);
-    p.setAttribute("aria-hidden", on ? "false" : "true");
-  });
-}
-
-interface HealthJson {
-  openai_configured?: boolean;
-  client_openai_ui?: boolean;
-}
-
-async function refreshPill() {
-  const pill = $("#pill-status");
-  const wrap = document.getElementById("client-key-wrap");
+async function refreshHealth(): Promise<void> {
   try {
     const r = await fetch(apiUrl("/api/health"));
-    const j = (await r.json()) as HealthJson;
-    const serverKey = Boolean(j.openai_configured);
-    const showClientUi = Boolean(j.client_openai_ui);
-    const hasBrowserKey = Boolean(getStoredOpenAIKey());
-
-    if (wrap) wrap.hidden = !showClientUi;
-
-    if (serverKey) {
-      pill.className = "pill pill-ok";
-      pill.textContent = "OpenAI — 서버 키 사용 중";
-      return;
-    }
-    if (showClientUi && hasBrowserKey) {
-      pill.className = "pill pill-ok";
-      pill.textContent = "OpenAI — 브라우저 키로 AI 활성";
-      return;
-    }
-    if (showClientUi) {
-      pill.className = "pill pill-warn";
-      pill.textContent = "OpenAI 키 입력·저장 시 AI 활성화";
-      return;
-    }
-    pill.className = "pill pill-warn";
-    pill.textContent = "OpenAI 사용 불가 (서버 미설정 또는 클라이언트 키 비허용)";
+    state.health = (await r.json()) as HealthJson;
   } catch {
-    pill.className = "pill pill-warn";
-    pill.textContent = "백엔드에 연결할 수 없습니다 (포트 8000 확인)";
-    if (wrap) wrap.hidden = true;
+    state.health = null;
   }
 }
 
-async function dashPreview() {
-  const csv_text = (document.getElementById("dash-csv") as HTMLTextAreaElement).value;
-  const data = await postJSON<{
-    note?: string;
-    columns: string[];
-    rows: Record<string, unknown>[];
-    stats: unknown;
-  }>("/api/dashboard/preview", { csv_text });
-  $("#dash-note").textContent = data.note ?? "";
-  renderTable($("#dash-table-wrap"), data.columns, data.rows);
-  $("#dash-stats").textContent = JSON.stringify(data.stats, null, 2);
+async function submitEvaluate(): Promise<void> {
+  state.error = null;
+  state.result = null;
+  const nameOk = state.members.some((m) => m.name.trim());
+  if (!state.project_name.trim() || !nameOk) {
+    state.error = "프로젝트 이름과 최소 한 명의 이름을 입력하세요.";
+    render();
+    return;
+  }
+
+  const body = {
+    project_name: state.project_name.trim(),
+    project_description: state.project_description.trim(),
+    evaluation_criteria: state.evaluation_criteria.trim(),
+    members: state.members
+      .filter((m) => m.name.trim())
+      .map((m) => ({
+        name: m.name.trim(),
+        role: m.role.trim(),
+        commits: parseOptInt(m.commits),
+        pull_requests: parseOptInt(m.pull_requests),
+        lines_changed: parseOptInt(m.lines_changed),
+        tasks_completed: parseOptInt(m.tasks_completed),
+        meetings_attended: parseOptInt(m.meetings_attended),
+        self_report: m.self_report,
+        peer_notes: m.peer_notes,
+      })),
+  };
+
+  state.loading = true;
+  render();
+
+  try {
+    const r = await fetch(apiUrl("/api/evaluate"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as EvaluateResponse & { detail?: unknown };
+    if (!r.ok) {
+      const detail = data.detail;
+      state.error =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? JSON.stringify(detail)
+            : "요청에 실패했습니다.";
+      state.loading = false;
+      render();
+      return;
+    }
+    state.result = data;
+  } catch (e) {
+    state.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.loading = false;
+  }
+  render();
 }
 
-async function opsPreview() {
-  const csv_text = (document.getElementById("ops-csv") as HTMLTextAreaElement).value;
-  const data = await postJSON<{
-    note?: string;
-    columns: string[];
-    rows: Record<string, unknown>[];
-    stats: unknown;
-  }>("/api/ops/preview", { csv_text });
-  $("#ops-note").textContent = data.note ?? "";
-  renderTable($("#ops-table-wrap"), data.columns, data.rows);
-  $("#ops-stats").textContent = JSON.stringify(data.stats, null, 2);
+function render(): void {
+  const app = document.getElementById("app");
+  if (!app) return;
+
+  const h = state.health;
+  const pill =
+    h?.openai_configured === true
+      ? '<span class="pill ok">OpenAI 연결됨 — AI 평가 모드</span>'
+      : '<span class="pill warn">OPENAI_API_KEY 없음 — 휴리스틱 평가</span>';
+
+  const membersHtml = state.members
+    .map(
+      (m, i) => `
+    <div class="member-card" data-idx="${i}">
+      <div class="member-card-head">
+        <h3 class="member-card-title">멤버 ${i + 1}</h3>
+        ${
+          state.members.length > 1
+            ? `<button type="button" class="btn btn-danger btn-remove" data-idx="${i}">삭제</button>`
+            : ""
+        }
+      </div>
+      <div class="grid-2">
+        <div>
+          <label class="lbl" for="name-${i}">이름</label>
+          <input class="txt" id="name-${i}" data-f="name" data-i="${i}" value="${escapeHtml(m.name)}" placeholder="홍길동" />
+        </div>
+        <div>
+          <label class="lbl" for="role-${i}">역할</label>
+          <input class="txt" id="role-${i}" data-f="role" data-i="${i}" value="${escapeHtml(m.role)}" placeholder="백엔드, UI, 기획…" />
+        </div>
+      </div>
+      <div class="mini-grid" style="margin-top:0.65rem">
+        <div>
+          <label class="lbl">커밋 수</label>
+          <input class="txt" type="number" min="0" data-f="commits" data-i="${i}" value="${escapeHtml(m.commits)}" placeholder="선택" />
+        </div>
+        <div>
+          <label class="lbl">PR 수</label>
+          <input class="txt" type="number" min="0" data-f="pull_requests" data-i="${i}" value="${escapeHtml(m.pull_requests)}" placeholder="선택" />
+        </div>
+        <div>
+          <label class="lbl">변경 라인(근사)</label>
+          <input class="txt" type="number" min="0" data-f="lines_changed" data-i="${i}" value="${escapeHtml(m.lines_changed)}" placeholder="선택" />
+        </div>
+        <div>
+          <label class="lbl">완료 태스크</label>
+          <input class="txt" type="number" min="0" data-f="tasks_completed" data-i="${i}" value="${escapeHtml(m.tasks_completed)}" placeholder="선택" />
+        </div>
+        <div>
+          <label class="lbl">회의 참여</label>
+          <input class="txt" type="number" min="0" data-f="meetings_attended" data-i="${i}" value="${escapeHtml(m.meetings_attended)}" placeholder="선택" />
+        </div>
+      </div>
+      <div style="margin-top:0.65rem">
+        <label class="lbl">본인 기여 서술</label>
+        <textarea class="txt" data-f="self_report" data-i="${i}" rows="3" placeholder="맡은 일, 구현 내용, 협업 방식 등">${escapeHtml(m.self_report)}</textarea>
+      </div>
+      <div style="margin-top:0.65rem">
+        <label class="lbl">동료/팀 메모 (선택)</label>
+        <textarea class="txt" data-f="peer_notes" data-i="${i}" rows="2" placeholder="익명 피드백 요약 등">${escapeHtml(m.peer_notes)}</textarea>
+      </div>
+    </div>`
+    )
+    .join("");
+
+  let resultHtml = "";
+  if (state.result) {
+    const res = state.result;
+    const modeBadge =
+      res.mode === "ai"
+        ? '<span class="badge badge-ai">AI 평가</span>'
+        : '<span class="badge badge-heuristic">휴리스틱</span>';
+
+    const cards = res.members
+      .map((mem) => {
+        const d = mem.dimensions;
+        return `
+      <div class="result-card">
+        <h3>${escapeHtml(mem.name)}</h3>
+        <p class="result-role">${escapeHtml(mem.role || "역할 미입력")}</p>
+        <div class="score-label">종합 기여 지수</div>
+        <div class="score-big">${mem.contribution_index.toFixed(1)}</div>
+        <div class="dim-row">
+          <span>기술·구현</span><span>${d.technical.toFixed(0)}</span>
+          <div class="dim-bar"><span style="width:${Math.min(100, d.technical)}%"></span></div>
+          <span>협업</span><span>${d.collaboration.toFixed(0)}</span>
+          <div class="dim-bar"><span style="width:${Math.min(100, d.collaboration)}%"></span></div>
+          <span>주도성</span><span>${d.initiative.toFixed(0)}</span>
+          <div class="dim-bar"><span style="width:${Math.min(100, d.initiative)}%"></span></div>
+        </div>
+        <p class="muted" style="margin-top:0.75rem">${escapeHtml(mem.evidence_summary)}</p>
+        ${mem.caveats ? `<p class="muted">${escapeHtml(mem.caveats)}</p>` : ""}
+      </div>`;
+      })
+      .join("");
+
+    resultHtml = `
+    <section class="panel">
+      <div class="results-header">
+        <h2 style="margin:0">평가 결과</h2>
+        ${modeBadge}
+      </div>
+      <p class="prose">${escapeHtml(res.project_summary || "—")}</p>
+      <p class="prose"><strong>공정성·한계:</strong> ${escapeHtml(res.fairness_notes || "—")}</p>
+      <div class="result-grid">${cards}</div>
+      <p class="footer-note">${escapeHtml(res.disclaimer)}</p>
+    </section>`;
+  }
+
+  app.innerHTML = `
+    <header class="site-header">
+      <h1 class="site-title">팀 프로젝트 기여도 자동 평가</h1>
+      <p class="site-lead">
+        Git 수치·태스크·자기·동료 서술을 묶어 기여도를 추정합니다. OpenAI 키가 있으면 루브릭에 가깝게 서술을 반영하고, 없으면 정량 휴리스틱만 사용합니다.
+      </p>
+      <div class="pill-row">${pill}</div>
+    </header>
+
+    <section class="panel">
+      <h2>프로젝트</h2>
+      <div class="grid-2">
+        <div>
+          <label class="lbl" for="project_name">프로젝트 이름</label>
+          <input class="txt" id="project_name" value="${escapeHtml(state.project_name)}" placeholder="예: 캡스톤 A팀" />
+        </div>
+        <div>
+          <label class="lbl" for="project_description">목표·범위 (선택)</label>
+          <textarea class="txt" id="project_description" rows="2" placeholder="과제 요구사항 요약">${escapeHtml(state.project_description)}</textarea>
+        </div>
+      </div>
+      <div style="margin-top:1rem">
+        <label class="lbl" for="evaluation_criteria">추가 평가 기준 (선택)</label>
+        <textarea class="txt" id="evaluation_criteria" rows="2" placeholder="교수 루브릭, 배점 비율 등">${escapeHtml(state.evaluation_criteria)}</textarea>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>팀원</h2>
+      ${membersHtml}
+      <button type="button" class="btn btn-ghost" id="btn-add-member">+ 멤버 추가</button>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-eval" ${state.loading ? "disabled" : ""}>
+          ${state.loading ? "평가 중…" : "평가 실행"}
+        </button>
+      </div>
+      ${state.error ? `<p class="err">${escapeHtml(state.error)}</p>` : ""}
+    </section>
+    ${resultHtml}
+  `;
+
+  wire();
 }
 
-function init() {
-  document.querySelectorAll(".tab").forEach((b) => {
-    b.addEventListener("click", () => showTab((b as HTMLElement).dataset.tab ?? "dash"));
-  });
+function readFormFromDom(): void {
+  const pn = document.getElementById("project_name") as HTMLInputElement | null;
+  const pd = document.getElementById("project_description") as HTMLTextAreaElement | null;
+  const ec = document.getElementById("evaluation_criteria") as HTMLTextAreaElement | null;
+  if (pn) state.project_name = pn.value;
+  if (pd) state.project_description = pd.value;
+  if (ec) state.evaluation_criteria = ec.value;
 
-  void refreshPill();
-
-  document.getElementById("btn-client-key-save")?.addEventListener("click", () => {
-    const input = document.getElementById("client-openai-key") as HTMLInputElement | null;
-    const feedback = document.getElementById("client-key-feedback");
-    const v = input?.value.trim() ?? "";
-    if (!v) {
-      if (feedback) {
-        feedback.textContent = "키를 입력한 뒤 저장하세요.";
-        feedback.style.color = "var(--warn)";
-      }
-      return;
+  document.querySelectorAll("[data-f][data-i]").forEach((el) => {
+    const f = el.getAttribute("data-f") as keyof MemberForm;
+    const i = parseInt(el.getAttribute("data-i") || "-1", 10);
+    if (i < 0 || i >= state.members.length) return;
+    const row = state.members[i];
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      row[f] = el.value as never;
     }
-    setStoredOpenAIKey(v);
-    if (input) input.value = "";
-    if (feedback) {
-      feedback.textContent = "저장했습니다. 이 탭을 닫기 전까지 유지됩니다.";
-      feedback.style.color = "var(--ok)";
-    }
-    void refreshPill();
   });
-
-  document.getElementById("btn-client-key-clear")?.addEventListener("click", () => {
-    const input = document.getElementById("client-openai-key") as HTMLInputElement | null;
-    const feedback = document.getElementById("client-key-feedback");
-    setStoredOpenAIKey("");
-    if (input) input.value = "";
-    if (feedback) {
-      feedback.textContent = "브라우저에 저장한 키를 지웠습니다.";
-      feedback.style.color = "var(--muted)";
-    }
-    void refreshPill();
-  });
-
-  button("#btn-learn").addEventListener("click", async () => {
-    const q = (document.getElementById("learn-q") as HTMLInputElement).value.trim();
-    const k = Math.min(8, Math.max(2, parseInt((document.getElementById("learn-k") as HTMLInputElement).value, 10) || 4));
-    $("#learn-hits").innerHTML = "";
-    ($("#learn-ans") as HTMLElement).textContent = "";
-    if (!q) {
-      alert("질문을 입력하세요.");
-      return;
-    }
-    await withBusy(button("#btn-learn"), async () => {
-      try {
-        const data = await postJSON<{ hits: Hit[]; answer?: string | null; answer_error?: string | null }>(
-          "/api/learn",
-          { query: q, top_k: k }
-        );
-        renderHits($("#learn-hits") as HTMLElement, data.hits);
-        ($("#learn-ans") as HTMLElement).textContent = data.answer_error ?? data.answer ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-comp").addEventListener("click", async () => {
-    const question = (document.getElementById("comp-q") as HTMLInputElement).value.trim();
-    const answer = (document.getElementById("comp-a") as HTMLTextAreaElement).value.trim();
-    const top_k = Math.min(8, Math.max(2, parseInt((document.getElementById("comp-k") as HTMLInputElement).value, 10) || 4));
-    $("#comp-hits").innerHTML = "";
-    ($("#comp-report") as HTMLElement).textContent = "";
-    if (!question || !answer) {
-      alert("질문과 답변을 입력하세요.");
-      return;
-    }
-    await withBusy(button("#btn-comp"), async () => {
-      try {
-        const data = await postJSON<{ hits: Hit[]; report?: string | null; report_error?: string | null }>(
-          "/api/comprehension",
-          { question, answer, top_k }
-        );
-        renderHits($("#comp-hits") as HTMLElement, data.hits);
-        ($("#comp-report") as HTMLElement).textContent = data.report_error ?? data.report ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-integ").addEventListener("click", async () => {
-    const submission = (document.getElementById("integ-sub") as HTMLTextAreaElement).value.trim();
-    const assignment_prompt = (document.getElementById("integ-prompt") as HTMLTextAreaElement).value;
-    $("#integ-heur").textContent = "";
-    $("#integ-sim").textContent = "";
-    ($("#integ-narr") as HTMLElement).textContent = "";
-    if (!submission) {
-      alert("제출 본문을 입력하세요.");
-      return;
-    }
-    await withBusy(button("#btn-integ"), async () => {
-      try {
-        const data = await postJSON<{
-          heuristic: unknown;
-          max_similarity: number;
-          max_similarity_source: string | null;
-          narrative?: string | null;
-          narrative_error?: string | null;
-        }>("/api/integrity", { assignment_prompt, submission });
-        $("#integ-heur").textContent = JSON.stringify(data.heuristic, null, 2);
-        $("#integ-sim").textContent =
-          "자료 대비 최대 유사도(참고): " +
-          data.max_similarity +
-          (data.max_similarity_source ? " · 출처: " + data.max_similarity_source : "");
-        ($("#integ-narr") as HTMLElement).textContent = data.narrative_error ?? data.narrative ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-fb").addEventListener("click", async () => {
-    const rubric = (document.getElementById("rub") as HTMLTextAreaElement).value;
-    const submission = (document.getElementById("sub") as HTMLTextAreaElement).value.trim();
-    ($("#fb-out") as HTMLElement).textContent = "";
-    if (!submission) {
-      alert("학생 제출을 입력하세요.");
-      return;
-    }
-    await withBusy(button("#btn-fb"), async () => {
-      try {
-        const data = await postJSON<{ draft: string }>("/api/teacher-feedback", { rubric, submission });
-        ($("#fb-out") as HTMLElement).textContent = data.draft ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-dash-preview").addEventListener("click", async () => {
-    await withBusy(button("#btn-dash-preview"), async () => {
-      try {
-        await dashPreview();
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-dash-sum").addEventListener("click", async () => {
-    ($("#dash-summary") as HTMLElement).textContent = "";
-    await withBusy(button("#btn-dash-sum"), async () => {
-      try {
-        await dashPreview();
-        const csv_text = (document.getElementById("dash-csv") as HTMLTextAreaElement).value;
-        const data = await postJSON<{ summary: string }>("/api/dashboard/summarize", { csv_text });
-        ($("#dash-summary") as HTMLElement).textContent = data.summary ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-ops-preview").addEventListener("click", async () => {
-    await withBusy(button("#btn-ops-preview"), async () => {
-      try {
-        await opsPreview();
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  button("#btn-ops-sum").addEventListener("click", async () => {
-    ($("#ops-summary") as HTMLElement).textContent = "";
-    await withBusy(button("#btn-ops-sum"), async () => {
-      try {
-        await opsPreview();
-        const csv_text = (document.getElementById("ops-csv") as HTMLTextAreaElement).value;
-        const data = await postJSON<{ summary: string }>("/api/ops/summarize", { csv_text });
-        ($("#ops-summary") as HTMLElement).textContent = data.summary ?? "";
-      } catch (e) {
-        alert(e instanceof Error ? e.message : String(e));
-      }
-    });
-  });
-
-  showTab("dash");
 }
 
-init();
+function wire(): void {
+  document.getElementById("btn-add-member")?.addEventListener("click", () => {
+    readFormFromDom();
+    state.members.push(emptyMember());
+    render();
+  });
 
-/** 프로덕션에서만: Chrome 등 “앱 설치” 조건을 맞추기 위한 빈 서비스 워커 */
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
-  const base = import.meta.env.BASE_URL || "/";
-  void navigator.serviceWorker.register(`${base}sw.js`);
+  document.querySelectorAll(".btn-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      readFormFromDom();
+      const idx = parseInt((btn as HTMLElement).dataset.idx || "-1", 10);
+      if (idx >= 0 && state.members.length > 1) {
+        state.members.splice(idx, 1);
+        render();
+      }
+    });
+  });
+
+  document.getElementById("btn-eval")?.addEventListener("click", () => {
+    readFormFromDom();
+    void submitEvaluate();
+  });
 }
+
+void refreshHealth().then(() => render());
