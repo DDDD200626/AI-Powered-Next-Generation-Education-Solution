@@ -1,22 +1,20 @@
-# EduSignal — 교육 현장 페인 포인트 × AI
+# 팀 프로젝트 기여도 자동 평가 시스템
 
-교육 현장의 반복 과제(과정–시험, 팀, 이탈, 피드백, 반복 질문, 대규모 토론, 채점 공정성)를 **보조**하기 위한 API와 웹 UI입니다. 출력은 **참고용**이며 징계·최종 성적을 대체하지 않습니다.
+팀 단위 과제에서 **정량·서술·주차별 활동**을 입력하면 **기여 지수**, **무임승차 의심**, **기여도 타임라인**, **팀원별 AI 피드백**을 자동 생성하는 **교육 보조** 웹·API입니다. 출력은 **참고용**이며 최종 평가·징계를 대체하지 않습니다.
 
-## 구현된 기능
+**핵심 API:** `POST /api/team/evaluate`  
+동일 저장소에 **부가 모듈**(과정–시험 분석, 4AI 비교, 이탈 경보, 피드백 초안 등)이 포함되어 있으며, 웹에서는 **「부가 도구」** 메뉴에서 열 수 있습니다.
+
+## 구현된 기능 (요약)
 
 | 영역 | 설명 |
 |------|------|
-| **과정 vs 시험** | Gemini, ChatGPT, Claude, Grok 병렬 (`POST /api/analyze`). 키가 없으면 휴리스틱. |
-| **팀 기여도** | 정량·서술·주차별 활동 → 기여 지수, **무임승차 의심**, **타임라인**, **팀원별 AI 피드백** (`POST /api/team/evaluate`). |
-| **이탈·위험** | 주차별 참여 → 위험 지수 (`POST /api/at-risk/evaluate`). |
-| **과제 피드백 초안** | 루브릭·제출물 (`POST /api/feedback/draft`). **OpenAI 필수**. |
-| **강의 안내 Q&A** | 실라버스 발췌 + 질문 → 답 초안·인용 (`POST /api/course/ask`). |
-| **토론 요약** | 게시글 목록 → 주제·후속 질문 (`POST /api/discussion/synthesize`). |
-| **루브릭 정합** | 루브릭 + 채점 근거 → 정합 점수·격차 (`POST /api/rubric/check`). |
+| **팀 기여도 (핵심)** | `POST /api/team/evaluate` — 기여 지수, 무임승차 의심, **기여 유형(개발·문서·리더·서포터)**, **기여–결과 불일치**, **협업 네트워크 그래프**, **이상 탐지(고급)**, 타임라인, 팀원별 피드백 |
+| **과정 vs 시험** | `POST /api/analyze` — 다중 LLM 구조화 분석 |
+| **4AI 자유 비교** | `POST /api/llm/compare` — Gemini·ChatGPT·Claude·Grok 병렬 |
+| **이탈·피드백·QnA·토론·루브릭** | 각 `/api/...` (README 하단 백엔드 절 참고) |
 
-프론트엔드: **허브**와 상단 메뉴에서 각 도구로 이동 · **안내**에 운영 주의사항.
-
-## 한 번에 실행 (백엔드 + 프론트 연결)
+## 한 번에 실행 (백엔드 + 프론트)
 
 저장소 **루트**에서 (Python 의존성은 먼저 한 번 설치):
 
@@ -29,9 +27,9 @@ npm install
 npm run dev
 ```
 
-- **API**: `http://127.0.0.1:8000` — FastAPI (`/docs` 로 스키마 확인)  
-- **웹 UI**: `http://127.0.0.1:5173` — Vite가 **`/api` 요청을 백엔드로 프록시**합니다.  
-- 프론트는 `fetch("/api/...")` 만 사용하면 되며, 별도 `VITE_API_BASE` 없이 개발하면 됩니다.
+- **API**: `http://127.0.0.1:8000` — 문서: `/docs`  
+- **웹**: `http://127.0.0.1:5173` — 기본 화면이 **팀 기여도 자동 평가**입니다.  
+- `VITE_API_BASE` 없이 개발하면 Vite가 `/api`를 백엔드로 프록시합니다.
 
 ## 백엔드만 실행할 때
 
@@ -39,32 +37,27 @@ npm run dev
 cd backend
 pip install -r requirements.txt
 copy .env.example .env
-# GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY 등 설정
 uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 - `GET /api/health` — 제공자 키 설정 여부  
-- `POST /api/analyze` — `learning_analysis.schemas.AnalyzeRequest`  
-- `POST /api/team/evaluate` — 팀 기여도  
-- `POST /api/at-risk/evaluate` — 이탈 조기 경보  
-- `POST /api/feedback/draft` — 피드백 초안 (OpenAI 필요)  
-- `POST /api/course/ask` — 강의 안내 기반 Q&A 초안  
-- `POST /api/discussion/synthesize` — 토론 스레드 요약  
-- `POST /api/rubric/check` — 루브릭·채점 근거 정합 점검  
-- 문서: `http://127.0.0.1:8000/docs`
+- `POST /api/team/evaluate` — 팀 기여도 자동 평가  
+- `POST /api/analyze` — 학습–시험 불일치 분석  
+- `POST /api/llm/compare` — 4모델 자유 응답 비교  
+- `POST /api/at-risk/evaluate`, `/api/feedback/draft`, `/api/course/ask`, `/api/discussion/synthesize`, `/api/rubric/check` — 부가 도구  
 
 ### 환경 변수 요약
 
 | 키 | 용도 |
 |----|------|
-| `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY` | Gemini (`GEMINI_MODEL`, 기본 `gemini-2.0-flash`) |
-| `OPENAI_API_KEY` | ChatGPT — 팀·이탈·피드백·강의Q·토론·루브릭 보조, 과정–시험 파이프라인 |
-| `ANTHROPIC_API_KEY` | Claude (`ANTHROPIC_MODEL`) |
-| `XAI_API_KEY` 또는 `GROK_API_KEY` | Grok (`GROK_MODEL`, `XAI_BASE_URL`) |
+| `OPENAI_API_KEY` | 팀 평가·피드백 등 품질 향상에 권장 |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Gemini |
+| `ANTHROPIC_API_KEY` | Claude |
+| `XAI_API_KEY` / `GROK_API_KEY` | Grok |
 
 ## 프론트엔드만 실행할 때
 
-백엔드를 **먼저** `127.0.0.1:8000` 에 띄운 뒤:
+백엔드를 먼저 `127.0.0.1:8000` 에 띄운 뒤:
 
 ```bash
 cd frontend
@@ -72,10 +65,14 @@ npm install
 npm run dev
 ```
 
-**프로덕션 빌드 미리보기** (`npm run preview`)도 `vite.config.ts`에 동일한 `/api` 프록시가 있어, 백엔드가 켜져 있으면 같은 방식으로 연결됩니다.
+배포 시 다른 도메인만 쓰면 `frontend/.env.example` 참고해 `VITE_API_BASE` 설정.
 
-정적 파일을 **다른 도메인**에만 올릴 때는 빌드 전에 `frontend/.env.production` 등에 `VITE_API_BASE=https://백엔드-주소` 를 넣으세요 (`frontend/.env.example` 참고).
+### `POST /api/team/evaluate` 요청·응답 (고급 필드)
+
+- **멤버별 `outcome_score`** (선택, 0–100): 발표·동료 평가 등 **결과 점수**. 있으면 추정 **기여 지수**와 비교해 불일치 목록(`mismatches`)·요약(`contribution_outcome_summary`)을 채웁니다.
+- **`collaboration_edges`** (선택): `[{ "source": "이름", "target": "이름", "weight": 0–100 }]` — 팀원 간 상호작용. 없으면 서버가 기여 지수로 **완전 그래프**를 추정합니다.
+- **응답**: `collaboration_network`(노드 좌표·간선), `anomaly_alerts`(예: `FREE_RIDER`, `NETWORK_ISOLATE`, `CONTRIBUTION_OUTCOME_GAP`), 멤버별 `contribution_type_label`·`role_scores`, `advanced_mode`(`heuristic` | `openai_enriched`).
 
 ## 주의
 
-교육 **보조**용입니다. 부정행위 판정·징계는 인간의 심사와 절차에 따르며, 모델 출력에는 오류·편향이 있을 수 있습니다.
+교육 **보조**용입니다. 자동 평가 결과는 **교수·조교 검토** 후 활용하고, 갈등·이의는 **기관 절차**를 따릅니다.

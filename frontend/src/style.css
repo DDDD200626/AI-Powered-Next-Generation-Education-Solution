@@ -1272,6 +1272,64 @@ textarea.txt {
   display: block;
 }
 
+.network-chart-wrap {
+  margin: 1.25rem 0;
+}
+
+.network-svg {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  display: block;
+}
+
+.mono-input {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.whitespace-pre-wrap {
+  white-space: pre-wrap;
+}
+
+.role-badge {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  color: var(--accent);
+  border: 1px solid rgba(0, 240, 255, 0.35);
+  border-radius: 3px;
+  margin-right: 0.25rem;
+}
+
+.sev {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.sev-low {
+  color: #94a3b8;
+}
+
+.sev-medium {
+  color: #fbbf24;
+}
+
+.sev-high {
+  color: #f87171;
+}
+
+.advanced-summary-box,
+.mismatch-table-wrap,
+.anomaly-box {
+  margin: 1rem 0;
+}
+
+.anomaly-line {
+  margin: 0.35rem 0;
+  font-size: 0.9rem;
+}
+
 .timeline-legend-item {
   margin-right: 1rem;
   font-size: 0.85rem;
@@ -1330,6 +1388,13 @@ textarea.txt {
 
 .feedback-text {
   white-space: pre-wrap;
+}
+
+.llm-freeform-text {
+  white-space: pre-wrap;
+  font-size: 0.86rem;
+  max-height: 28rem;
+  overflow-y: auto;
 }
 
 @media (prefers-reduced-motion: reduce) {
