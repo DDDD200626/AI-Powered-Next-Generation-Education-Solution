@@ -58,9 +58,13 @@ python -m classpulse.app
 
 ```bash
 cd frontend
-npm install
+npm install   # package-lock.json 으로 동일 버전 재현
 npm run dev
 ```
+
+프로덕션 번들 확인: `npm run build` → `frontend/dist/` (저장소에는 `.gitignore`로 제외)
+
+Windows에서 `npm`은 되는데 `node`를 못 찾는다면, 터미널을 다시 열거나 PATH에 `C:\Program Files\nodejs` 가 포함됐는지 확인하세요.
 
 - UI: http://127.0.0.1:5173 (개발 시 Vite가 `/api` → `8000` 프록시)
 
