@@ -20,8 +20,9 @@ from edu_tools.discussion import router as discussion_router
 from edu_tools.feedback import router as feedback_router
 from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
+from learning_analysis.compare_freeform import compare_llm_async
 from learning_analysis.pipeline import analyze_async, provider_keys_status
-from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse
+from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse, LLMCompareRequest, LLMCompareResponse
 
 
 def _cors_origins() -> list[str]:
@@ -32,9 +33,9 @@ def _cors_origins() -> list[str]:
 
 
 app = FastAPI(
-    title="EduSignal Platform",
-    description="학습-시험 분석, 팀·이탈·피드백, 강의 QnA, 토론 요약, 루브릭 정합 점검",
-    version="3.1.0",
+    title="팀 프로젝트 기여도 자동 평가 시스템",
+    description="핵심: POST /api/team/evaluate — 기여도·무임승차 의심·타임라인·팀원 피드백. 부가: 학습-시험 분석, 4모델 비교, 이탈·피드백·QnA·토론·루브릭",
+    version="4.0.0",
 )
 
 app.include_router(team_router, prefix="/api/team", tags=["team"])
@@ -62,3 +63,8 @@ async def health():
 @app.post("/api/analyze", response_model=AnalyzeResponse)
 async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
     return await analyze_async(body)
+
+
+@app.post("/api/llm/compare", response_model=LLMCompareResponse)
+async def api_llm_compare(body: LLMCompareRequest) -> LLMCompareResponse:
+    return await compare_llm_async(body)

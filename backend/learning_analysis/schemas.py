@@ -59,3 +59,26 @@ class AnalyzeResponse(BaseModel):
     consensus_cheating_avg: float | None = Field(None, description="모델 평균 부정행위 의심도")
     consensus_summary: str = Field("", description="종합 요약")
     disclaimer: str = Field("", description="법적·교육적 한계 안내")
+
+
+class LLMCompareRequest(BaseModel):
+    """Gemini·ChatGPT·Claude·Grok 동일 프롬프트 병렬 분석."""
+
+    prompt: str = Field(..., min_length=1, max_length=20000, description="분석할 본문·질문")
+    system_hint: str = Field("", max_length=4000, description="추가 시스템 지시(선택)")
+    task_title: str = Field("", max_length=200, description="작업 제목(선택)")
+
+
+class LLMTextResult(BaseModel):
+    provider: str
+    model_label: str
+    ok: bool = True
+    text: str = ""
+    error: str | None = None
+
+
+class LLMCompareResponse(BaseModel):
+    providers_used: list[str] = Field(default_factory=list)
+    providers_skipped: list[str] = Field(default_factory=list)
+    results: list[LLMTextResult]
+    disclaimer: str = ""

@@ -18,6 +18,7 @@ type SiteView =
   | "syllabus"
   | "discussion"
   | "rubric"
+  | "llm"
   | "about";
 
 interface ProviderKeys {
@@ -56,6 +57,8 @@ interface TeamMemberRow {
   lines_changed: string;
   tasks_completed: string;
   meetings_attended: string;
+  /** 프로젝트·동료 평가 등 결과 점수(선택, 기여 추정과 비교) */
+  outcome_score: string;
   self_report: string;
   peer_notes: string;
   /** 주차별 활동(선택): 입력 시 타임라인에 반영 */
@@ -86,6 +89,43 @@ interface TeamMemberOut {
   free_rider_signals?: string[];
   ai_feedback?: string;
   timeline?: TimelinePointOut[];
+  contribution_type_label?: string;
+  role_scores?: Record<string, number>;
+}
+
+interface NetworkNode {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  contribution_index: number;
+}
+
+interface NetworkEdge {
+  source: string;
+  target: string;
+  weight: number;
+}
+
+interface NetworkGraph {
+  nodes: NetworkNode[];
+  edges: NetworkEdge[];
+}
+
+interface MismatchItem {
+  member_name: string;
+  contribution_index: number;
+  outcome_score?: number | null;
+  gap?: number | null;
+  note?: string;
+  severity?: string;
+}
+
+interface AnomalyAlert {
+  member_name: string;
+  code: string;
+  severity?: string;
+  message?: string;
 }
 
 interface TeamEvaluateResponse {
@@ -93,6 +133,11 @@ interface TeamEvaluateResponse {
   members: TeamMemberOut[];
   fairness_notes?: string;
   free_rider_summary?: string;
+  collaboration_network?: NetworkGraph;
+  contribution_outcome_summary?: string;
+  mismatches?: MismatchItem[];
+  anomaly_alerts?: AnomalyAlert[];
+  advanced_mode?: string;
   disclaimer?: string;
 }
 
@@ -144,6 +189,21 @@ interface RubricAlignResponse {
   disclaimer?: string;
 }
 
+interface LLMTextResult {
+  provider: string;
+  model_label: string;
+  ok: boolean;
+  text: string;
+  error?: string | null;
+}
+
+interface LLMCompareResponse {
+  providers_used: string[];
+  providers_skipped: string[];
+  results: LLMTextResult[];
+  disclaimer: string;
+}
+
 function emptyTimelineRow(): { period_label: string; activity_score: string } {
   return { period_label: "", activity_score: "" };
 }
@@ -157,6 +217,7 @@ function emptyTeamMember(): TeamMemberRow {
     lines_changed: "",
     tasks_completed: "",
     meetings_attended: "",
+    outcome_score: "",
     self_report: "",
     peer_notes: "",
     timeline: [
@@ -209,6 +270,8 @@ const state: {
     project_description: string;
     evaluation_criteria: string;
     members: TeamMemberRow[];
+    /** JSON 배열: [{"source":"이름","target":"이름","weight":0-100}] */
+    collaboration_edges_json: string;
     result: TeamEvaluateResponse | null;
     loading: boolean;
     error: string | null;
@@ -253,8 +316,16 @@ const state: {
     loading: boolean;
     error: string | null;
   };
+  llmCompare: {
+    task_title: string;
+    system_hint: string;
+    prompt: string;
+    result: LLMCompareResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
 } = {
-  view: "hub",
+  view: "team",
   course_name: "",
   student_or_group_label: "",
   weekly_study_hours: "",
@@ -278,6 +349,7 @@ const state: {
     project_description: "",
     evaluation_criteria: "",
     members: [emptyTeamMember(), emptyTeamMember()],
+    collaboration_edges_json: "",
     result: null,
     loading: false,
     error: null,
@@ -318,6 +390,14 @@ const state: {
     rubric: "",
     grader_rationale: "",
     student_work: "",
+    result: null,
+    loading: false,
+    error: null,
+  },
+  llmCompare: {
+    task_title: "",
+    system_hint: "",
+    prompt: "",
     result: null,
     loading: false,
     error: null,
@@ -413,6 +493,7 @@ function readTeamForm(): void {
     lines_changed: g(`tm_lines_${i}`)?.value ?? "",
     tasks_completed: g(`tm_tasks_${i}`)?.value ?? "",
     meetings_attended: g(`tm_meet_${i}`)?.value ?? "",
+    outcome_score: g(`tm_outcome_${i}`)?.value ?? "",
     self_report: g(`tm_self_${i}`)?.value ?? "",
     peer_notes: g(`tm_peer_${i}`)?.value ?? "",
     timeline: [0, 1, 2, 3].map((j) => ({
@@ -420,6 +501,7 @@ function readTeamForm(): void {
       activity_score: g(`tm_tl_s_${i}_${j}`)?.value ?? "",
     })),
   }));
+  state.team.collaboration_edges_json = g("team_collaboration_edges")?.value ?? "";
 }
 
 async function submitTeam(): Promise<void> {
@@ -441,6 +523,7 @@ async function submitTeam(): Promise<void> {
             : null;
         })
         .filter((x): x is { period_label: string; activity_score: number } => x !== null);
+      const oc = parseOptFloat(m.outcome_score);
       return {
         name: m.name.trim(),
         role: m.role.trim(),
@@ -452,6 +535,7 @@ async function submitTeam(): Promise<void> {
         self_report: m.self_report,
         peer_notes: m.peer_notes,
         timeline,
+        ...(oc !== null ? { outcome_score: Math.min(100, Math.max(0, oc)) } : {}),
       };
     });
 
@@ -462,11 +546,36 @@ async function submitTeam(): Promise<void> {
     return;
   }
 
+  let collaboration_edges: { source: string; target: string; weight: number }[] = [];
+  const rawEdges = state.team.collaboration_edges_json.trim();
+  if (rawEdges) {
+    try {
+      const parsed = JSON.parse(rawEdges) as unknown;
+      if (!Array.isArray(parsed)) throw new Error("not array");
+      collaboration_edges = parsed.map((e: unknown) => {
+        if (!e || typeof e !== "object") throw new Error("bad edge");
+        const o = e as Record<string, unknown>;
+        const w = typeof o.weight === "number" ? o.weight : parseFloat(String(o.weight ?? 5));
+        return {
+          source: String(o.source ?? "").trim(),
+          target: String(o.target ?? "").trim(),
+          weight: Number.isFinite(w) ? Math.min(100, Math.max(0, w)) : 5,
+        };
+      });
+    } catch {
+      state.team.error = "협업 네트워크 JSON 형식이 올바르지 않습니다. 예: [{\"source\":\"A\",\"target\":\"B\",\"weight\":40}]";
+      state.team.loading = false;
+      render();
+      return;
+    }
+  }
+
   const body = {
     project_name: state.team.project_name.trim(),
     project_description: state.team.project_description,
     evaluation_criteria: state.team.evaluation_criteria,
     members,
+    collaboration_edges,
   };
 
   try {
@@ -783,6 +892,58 @@ async function submitRubricAlign(): Promise<void> {
   render();
 }
 
+function readLlmCompareForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.llmCompare.task_title = g("llm_task_title")?.value ?? "";
+  state.llmCompare.system_hint = g("llm_system_hint")?.value ?? "";
+  state.llmCompare.prompt = g("llm_prompt")?.value ?? "";
+}
+
+async function submitLlmCompare(): Promise<void> {
+  readLlmCompareForm();
+  state.llmCompare.error = null;
+  state.llmCompare.result = null;
+  state.llmCompare.loading = true;
+  render();
+
+  const p = state.llmCompare.prompt.trim();
+  if (!p) {
+    state.llmCompare.error = "분석할 내용을 입력하세요.";
+    state.llmCompare.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    task_title: state.llmCompare.task_title.trim(),
+    system_hint: state.llmCompare.system_hint,
+    prompt: p,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/llm/compare"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as LLMCompareResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.llmCompare.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.llmCompare.loading = false;
+      render();
+      return;
+    }
+    state.llmCompare.result = data;
+  } catch (e) {
+    state.llmCompare.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.llmCompare.loading = false;
+  }
+  render();
+}
+
 function providerPills(): string {
   const p = state.health?.providers;
   if (!p) return '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
@@ -796,19 +957,13 @@ function navHtml(): string {
   return `
   <header class="site-header">
     <div class="nav-inner">
-      <a href="#" class="brand brand-mark" data-view="hub" aria-label="홈">
-        <span class="brand-title">EduSignal</span>
-        <span class="brand-tag">ED · AI SOLUTION LAB</span>
+      <a href="#" class="brand brand-mark" data-view="team" aria-label="팀 기여도 자동 평가">
+        <span class="brand-title">팀 기여도</span>
+        <span class="brand-tag">자동 평가 시스템 · AI</span>
       </a>
       <nav class="nav" aria-label="주요 메뉴">
-        <button type="button" class="${cur("hub")}" data-view="hub">허브</button>
-        <button type="button" class="${cur("analyze")}" data-view="analyze">과정·시험</button>
-        <button type="button" class="${cur("team")}" data-view="team">팀</button>
-        <button type="button" class="${cur("at-risk")}" data-view="at-risk">이탈</button>
-        <button type="button" class="${cur("feedback")}" data-view="feedback">피드백</button>
-        <button type="button" class="${cur("syllabus")}" data-view="syllabus">강의Q</button>
-        <button type="button" class="${cur("discussion")}" data-view="discussion">토론</button>
-        <button type="button" class="${cur("rubric")}" data-view="rubric">루브릭</button>
+        <button type="button" class="${cur("team")}" data-view="team">평가</button>
+        <button type="button" class="${cur("hub")}" data-view="hub">부가 도구</button>
         <button type="button" class="${cur("about")}" data-view="about">안내</button>
         <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
@@ -824,7 +979,7 @@ function footerHtml(): string {
         <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">저장소</a>
         · 교육 보조 도구이며 징계·단정에 사용할 수 없습니다.
       </p>
-      <p class="footer-muted">EduSignal — 교육 현장 페인 포인트를 AI로 보조하는 도구 모음</p>
+      <p class="footer-muted">팀 프로젝트 기여도 자동 평가 시스템 — 교육 보조·참고용</p>
     </div>
   </footer>`;
 }
@@ -833,19 +988,22 @@ function hubHtml(): string {
   return `
   <div class="page page-animate home-page">
     <section class="hero-block home-hero-main">
-      <p class="eyebrow">Education × AI</p>
-      <h1 class="home-headline">도구 허브</h1>
+      <p class="eyebrow">부가 모듈</p>
+      <h1 class="home-headline">교육 현장 보조 AI</h1>
       <p class="hero-text home-lead">
-        아래 도구는 <strong>실제 API</strong>와 연결되어 있습니다. 과정–시험은 다중 LLM, 팀·이탈·강의Q·토론·루브릭은 OpenAI가 있으면 품질이 올라가고 없으면 휴리스틱·키워드 요약을 씁니다. 피드백 초안은 OpenAI가 필요합니다.
+        본 서비스의 <strong>핵심은 상단 「평가」의 팀 기여도 자동 평가</strong>입니다. 아래는 같은 백엔드에 연결된 <strong>선택</strong> 도구입니다.
       </p>
       <p class="muted small home-lead" style="margin-top:0.5rem;">
-        로컬 개발: 저장소 루트에서 <code>npm run dev</code> → 백엔드 <code>8000</code> + Vite <code>5173</code>이 함께 뜨고, 브라우저의 <code>/api</code> 요청이 FastAPI로 프록시됩니다.
+        로컬: 루트 <code>npm run dev</code> → API <code>8000</code> + 웹 <code>5173</code> · <code>/api</code> 프록시
       </p>
       <div class="pill-row hero-pills">${providerPills()}</div>
+      <p class="row-actions" style="margin-top:1rem;">
+        <button type="button" class="btn btn-primary" data-view="team">팀 기여도 평가로 돌아가기</button>
+      </p>
     </section>
 
     <section class="section-block hud-section home-section">
-      <h2 class="section-title">기능 선택</h2>
+      <h2 class="section-title">부가 도구</h2>
       <div class="solution-grid">
         <article class="solution-tile solution-tile--live hud-card">
           <span class="solution-badge solution-badge--on">다중 LLM</span>
@@ -854,10 +1012,10 @@ function hubHtml(): string {
           <button type="button" class="btn btn-primary btn-block" data-view="analyze">열기</button>
         </article>
         <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">팀</span>
-          <h3>팀 기여도 초안</h3>
-          <p>커밋·과제·자기·동료 서술을 바탕으로 기여 지수·차원 점수 초안을 만듭니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="team">열기</button>
+          <span class="solution-badge solution-badge--on">4모델</span>
+          <h3>Gemini · ChatGPT · Claude · Grok</h3>
+          <p>같은 프롬프트로 네 AI에 동시에 질문하고 응답을 나란히 비교합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="llm">열기</button>
         </article>
         <article class="solution-tile solution-tile--live hud-card">
           <span class="solution-badge solution-badge--on">조기 경보</span>
@@ -897,11 +1055,12 @@ function hubHtml(): string {
 function aboutHtml(): string {
   return `
   <div class="page page-animate about-page">
-    <h1 class="page-title">이용 안내</h1>
+    <h1 class="page-title">팀 기여도 자동 평가 — 안내</h1>
     <div class="prose-block">
-      <p><strong>목적.</strong> 교수·조교·기관의 <strong>의사결정 보조</strong>입니다. 부정행위 여부는 인간의 심사·증거·절차에 따릅니다.</p>
-      <p><strong>API 키.</strong> <code>backend/.env</code>에 키를 넣으면 해당 모델이 응답합니다. 과정–시험은 다중 LLM, 팀·이탈·강의Q·토론·루브릭은 OpenAI 권장(없으면 단순 휴리스틱). <strong>과제 피드백 초안</strong>은 OpenAI 필수입니다.</p>
-      <p><strong>개인정보.</strong> 실명 대신 익명 라벨만 쓰는 것을 권장합니다.</p>
+      <p><strong>이 시스템은.</strong> 팀 프로젝트에서 수집 가능한 지표와 서술을 넣으면 <strong>기여도 초안·의심 신호·타임라인·피드백 문단</strong>을 자동으로 뽑아 주는 <strong>교육 보조 도구</strong>입니다.</p>
+      <p><strong>한계.</strong> 출력은 <strong>참고용</strong>이며, 최종 성적·평가·징계·팀 내 갈등 조정은 <strong>교수·조교·기관 절차</strong>와 대면 확인이 필요합니다. 무임승차 표시는 통계·키워드 기반입니다.</p>
+      <p><strong>API 키.</strong> <code>backend/.env</code> — 팀 평가 품질을 올리려면 <code>OPENAI_API_KEY</code> 권장(없으면 휴리스틱). <strong>부가 도구</strong> 중 과제 피드백 초안은 OpenAI 필수입니다.</p>
+      <p><strong>개인정보.</strong> 실명 대신 익명 라벨 사용을 권장합니다.</p>
       <p><strong>소스 코드.</strong> <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub 저장소</a></p>
     </div>
   </div>`;
@@ -931,6 +1090,7 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
       <div><label class="lbl">변경 라인</label><input class="txt" id="tm_lines_${i}" type="number" min="0" value="${escapeHtml(m.lines_changed)}" /></div>
       <div><label class="lbl">완료 태스크</label><input class="txt" id="tm_tasks_${i}" type="number" min="0" value="${escapeHtml(m.tasks_completed)}" /></div>
       <div><label class="lbl">회의 출석</label><input class="txt" id="tm_meet_${i}" type="number" min="0" value="${escapeHtml(m.meetings_attended)}" /></div>
+      <div><label class="lbl">결과 점수 (선택, 0–100)</label><input class="txt" id="tm_outcome_${i}" type="number" min="0" max="100" step="0.1" placeholder="발표·동료평가 등" value="${escapeHtml(m.outcome_score)}" /></div>
     </div>
     <details class="timeline-details">
       <summary>주차별 활동 점수 (선택, 무임승차·타임라인에 반영)</summary>
@@ -941,6 +1101,41 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
     <textarea class="txt" id="tm_self_${i}" rows="2">${escapeHtml(m.self_report)}</textarea>
     <label class="lbl">동료 메모</label>
     <textarea class="txt" id="tm_peer_${i}" rows="2">${escapeHtml(m.peer_notes)}</textarea>
+  </div>`;
+}
+
+function teamNetworkSvg(net: NetworkGraph | undefined): string {
+  if (!net?.nodes?.length) return "";
+  const pos = new Map(net.nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  const W = 520;
+  const H = 480;
+  const edgeLines = (net.edges || [])
+    .map((e) => {
+      const a = pos.get(e.source);
+      const b = pos.get(e.target);
+      if (!a || !b) return "";
+      const sw = Math.max(0.6, Math.min(5, (e.weight / 100) * 5));
+      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(0,240,255,0.4)" stroke-width="${sw}" />`;
+    })
+    .join("");
+  const circles = net.nodes
+    .map((n) => {
+      const lab = n.label || n.id;
+      return `<g>
+      <circle cx="${n.x}" cy="${n.y}" r="20" fill="rgba(12,18,28,0.95)" stroke="var(--border)" stroke-width="1" />
+      <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="#e2e8f0" font-size="10">${escapeHtml(lab)}</text>
+      <text x="${n.x}" y="${n.y + 28}" text-anchor="middle" fill="#7a8aa0" font-size="8">${n.contribution_index.toFixed(0)}</text>
+    </g>`;
+    })
+    .join("");
+  return `
+  <div class="network-chart-wrap hud-panel">
+    <h3 class="subh">협업 네트워크</h3>
+    <p class="muted small">노드는 팀원, 선은 상호작용 가중치입니다. 엣지를 입력하지 않으면 기여 지수로 추정한 완전 그래프입니다.</p>
+    <svg class="network-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="협업 네트워크 그래프">
+      ${edgeLines}
+      ${circles}
+    </svg>
   </div>`;
 }
 
@@ -1022,11 +1217,20 @@ function teamResultHtml(): string {
         ? `<span class="free-rider-badge" title="자동 의심">무임승차 의심</span>`
         : `<span class="pill pill-muted">—</span>`;
       const risk = m.free_rider_risk != null ? m.free_rider_risk.toFixed(0) : "—";
+      const role = m.contribution_type_label
+        ? `<span class="role-badge">${escapeHtml(m.contribution_type_label)}</span>`
+        : "—";
+      const rs = m.role_scores;
+      const rsTxt =
+        rs && Object.keys(rs).length
+          ? `<span class="muted small">dev ${(rs.dev ?? 0).toFixed(0)} · doc ${(rs.doc ?? 0).toFixed(0)} · leader ${(rs.leader ?? 0).toFixed(0)} · sup ${(rs.supporter ?? 0).toFixed(0)}</span>`
+          : "";
       return `
     <tr class="${m.free_rider_suspected ? "row-suspected" : ""}">
       <td>${escapeHtml(m.name)} ${sus}</td>
       <td>${m.contribution_index.toFixed(1)}</td>
       <td>${risk}</td>
+      <td>${role} ${rsTxt}</td>
       <td>${m.dimensions.technical.toFixed(0)} / ${m.dimensions.collaboration.toFixed(0)} / ${m.dimensions.initiative.toFixed(0)}</td>
       <td class="muted small">${escapeHtml(m.evidence_summary || "")}</td>
     </tr>`;
@@ -1049,16 +1253,55 @@ function teamResultHtml(): string {
     )
     .join("");
   const chart = teamTimelineSvg(res.members);
+  const net = teamNetworkSvg(res.collaboration_network);
+  const adv = res.advanced_mode
+    ? `<span class="pill ${res.advanced_mode === "openai_enriched" ? "pill-on" : "pill-muted"}">${escapeHtml(res.advanced_mode)}</span>`
+    : "";
+  const coSummary = res.contribution_outcome_summary
+    ? `<div class="advanced-summary-box hud-panel"><h3 class="subh">기여 vs 결과 불일치 분석</h3><p class="prose whitespace-pre-wrap">${escapeHtml(res.contribution_outcome_summary)}</p></div>`
+    : "";
+  const mmRows = (res.mismatches || [])
+    .map(
+      (x) => `
+    <tr>
+      <td>${escapeHtml(x.member_name)}</td>
+      <td>${x.contribution_index?.toFixed(1) ?? "—"}</td>
+      <td>${x.outcome_score != null ? x.outcome_score.toFixed(1) : "—"}</td>
+      <td>${x.gap != null ? x.gap.toFixed(1) : "—"}</td>
+      <td><span class="sev sev-${escapeHtml(x.severity || "low")}">${escapeHtml(x.severity || "")}</span></td>
+      <td class="muted small">${escapeHtml(x.note || "")}</td>
+    </tr>`
+    )
+    .join("");
+  const mismatchBlock =
+    res.mismatches && res.mismatches.length
+      ? `<div class="mismatch-table-wrap hud-panel"><h3 class="subh">불일치 상세 (추정 기여 vs 입력 결과)</h3>
+    <table class="data-table"><thead><tr><th>이름</th><th>기여 추정</th><th>결과 점수</th><th>차이</th><th>심각도</th><th>메모</th></tr></thead><tbody>${mmRows}</tbody></table></div>`
+      : "";
+  const anom = (res.anomaly_alerts || [])
+    .map(
+      (a) =>
+        `<p class="anomaly-line"><strong>${escapeHtml(a.member_name)}</strong> <code>${escapeHtml(a.code)}</code> <span class="sev sev-${escapeHtml(a.severity || "medium")}">${escapeHtml(a.severity || "")}</span> — ${escapeHtml(a.message || "")}</p>`
+    )
+    .join("");
+  const anomBlock =
+    res.anomaly_alerts && res.anomaly_alerts.length
+      ? `<div class="anomaly-box hud-panel"><h3 class="subh">비정상 행동 탐지 (고급, 참고)</h3>${anom}</div>`
+      : "";
   return `
   <section class="panel panel-result hud-panel">
-    <h2>결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span></h2>
+    <h2>자동 평가 결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span> ${adv}</h2>
     ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
     ${res.free_rider_summary ? `<p class="prose free-rider-summary">${escapeHtml(res.free_rider_summary)}</p>` : ""}
+    ${coSummary}
     ${sigBlock ? `<div class="signals-box">${sigBlock}</div>` : ""}
     <table class="data-table">
-      <thead><tr><th>이름</th><th>기여 지수</th><th>의심도</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
+      <thead><tr><th>이름</th><th>기여 지수</th><th>의심도</th><th>기여 유형 (자동)</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${net}
+    ${mismatchBlock}
+    ${anomBlock}
     ${chart}
     <h3 class="subh">팀원별 AI 피드백</h3>
     <div class="member-feedback-grid">${feedbackBlocks}</div>
@@ -1070,9 +1313,14 @@ function teamHtml(): string {
   const blocks = state.team.members.map((m, i) => teamMemberBlock(i, m)).join("");
   return `
   <div class="page page-animate analyze-page">
-    <p class="eyebrow">팀 프로젝트</p>
-    <h1 class="page-title">기여도 초안</h1>
-    <p class="lead analyze-lead">무임승차 의심·기여 타임라인·팀원별 피드백이 자동 생성됩니다. OpenAI 키가 있으면 기여 평가와 피드백 문장 품질이 올라갑니다.</p>
+    <p class="eyebrow">Team Project · Auto Evaluation</p>
+    <h1 class="page-title">팀 프로젝트 기여도 자동 평가</h1>
+    <p class="lead analyze-lead">
+      정량 지표(커밋·PR·태스크 등)·주차별 활동·자기·동료 서술을 바탕으로 <strong>기여 지수</strong>를 산출하고,
+      <strong>무임승차 의심</strong>·<strong>기여 유형(개발·문서·리더·서포터)</strong>·<strong>기여–결과 불일치</strong>·<strong>협업 네트워크</strong>·<strong>이상 탐지(고급)</strong>·<strong>기여도 타임라인</strong>·<strong>팀원별 AI 피드백</strong>을 제공합니다.
+      OpenAI 키가 있으면 서술 반영 평가·불일치 해설 품질이 올라갑니다. 최종 성적은 교수·기관 규정에 따릅니다.
+    </p>
+    <div class="pill-row">${providerPills()}</div>
 
     <section class="panel hud-panel">
       <div class="grid-2">
@@ -1085,12 +1333,15 @@ function teamHtml(): string {
       <textarea class="txt" id="team_project_description" rows="2">${escapeHtml(state.team.project_description)}</textarea>
       <label class="lbl">평가 기준 (선택)</label>
       <textarea class="txt" id="team_evaluation_criteria" rows="2">${escapeHtml(state.team.evaluation_criteria)}</textarea>
+      <label class="lbl">협업 네트워크 (선택, JSON 배열)</label>
+      <textarea class="txt mono-input" id="team_collaboration_edges" rows="3" placeholder='[{"source":"이름A","target":"이름B","weight":40}]'>${escapeHtml(state.team.collaboration_edges_json)}</textarea>
+      <p class="muted small">source·target은 위 멤버 이름과 동일하게. weight는 0–100. 비우면 서버가 기여 지수로 간선을 추정합니다.</p>
       ${blocks}
       <div class="row-actions">
         <button type="button" class="btn btn-ghost" id="btn-team-add">멤버 추가</button>
         <button type="button" class="btn btn-ghost" id="btn-team-remove" ${state.team.members.length <= 1 ? "disabled" : ""}>마지막 멤버 제거</button>
         <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading ? "disabled" : ""}>
-          ${state.team.loading ? "처리 중…" : "평가 실행"}
+          ${state.team.loading ? "자동 평가 중…" : "자동 평가 실행"}
         </button>
       </div>
       ${state.team.error ? `<p class="err">${escapeHtml(state.team.error)}</p>` : ""}
@@ -1280,6 +1531,70 @@ function discussionHtml(): string {
   </div>`;
 }
 
+function llmProviderLabel(provider: string): string {
+  const m: Record<string, string> = {
+    gemini: "Gemini",
+    openai: "ChatGPT",
+    claude: "Claude",
+    grok: "Grok",
+  };
+  return m[provider] || provider;
+}
+
+function llmCompareHtml(): string {
+  const r = state.llmCompare.result;
+  const skippedHtml =
+    r && r.providers_skipped.length > 0
+      ? `<p class="skipped muted small">건너뜀: ${escapeHtml(r.providers_skipped.join(" · "))}</p>`
+      : "";
+  const cards =
+    r?.results
+      .map((j) => {
+        if (!j.ok) {
+          return `<div class="card card-err"><h3>${escapeHtml(llmProviderLabel(j.provider))}</h3><p class="err">${escapeHtml(j.error || "오류")}</p></div>`;
+        }
+        return `<div class="card">
+        <div class="card-head">
+          <h3>${escapeHtml(llmProviderLabel(j.provider))}</h3>
+          <span class="model-tag">${escapeHtml(j.model_label || "")}</span>
+        </div>
+        <p class="prose llm-freeform-text">${escapeHtml(j.text)}</p>
+      </div>`;
+      })
+      .join("") ?? "";
+  const resultBlock = r
+    ? `
+  <section class="panel panel-result hud-panel" id="llm-results">
+    <h2>모델별 응답</h2>
+    ${skippedHtml}
+    <div class="card-grid">${cards}</div>
+    <p class="footer-note">${escapeHtml(r.disclaimer)}</p>
+  </section>`
+    : "";
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">4모델 병렬</p>
+    <h1 class="page-title">Gemini · ChatGPT · Claude · Grok</h1>
+    <p class="lead analyze-lead">동일한 요청을 네 AI에 동시에 보냅니다. <code>backend/.env</code>에 키가 있는 모델만 응답합니다.</p>
+    <div class="pill-row">${providerPills()}</div>
+    <section class="panel hud-panel">
+      <label class="lbl">작업 제목 (선택)</label>
+      <input class="txt" id="llm_task_title" placeholder="예: 수업 개선안 검토" value="${escapeHtml(state.llmCompare.task_title)}" />
+      <label class="lbl">추가 지시 (시스템 힌트, 선택)</label>
+      <textarea class="txt" id="llm_system_hint" rows="2" placeholder="예: bullet으로 짧게">${escapeHtml(state.llmCompare.system_hint)}</textarea>
+      <label class="lbl">분석·질문 내용</label>
+      <textarea class="txt" id="llm_prompt" rows="10" placeholder="여기에 붙여 넣으면 Gemini, ChatGPT, Claude, Grok이 각각 답합니다.">${escapeHtml(state.llmCompare.prompt)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-llm-run" ${state.llmCompare.loading ? "disabled" : ""}>
+          ${state.llmCompare.loading ? "요청 중…" : "4개 AI 동시 분석"}
+        </button>
+      </div>
+      ${state.llmCompare.error ? `<p class="err">${escapeHtml(state.llmCompare.error)}</p>` : ""}
+    </section>
+    ${resultBlock}
+  </div>`;
+}
+
 function rubricAlignHtml(): string {
   const r = state.rubricAlign.result;
   const resultBlock = r
@@ -1463,8 +1778,12 @@ function mainContentHtml(): string {
       return discussionHtml();
     case "rubric":
       return rubricAlignHtml();
-    default:
+    case "llm":
+      return llmCompareHtml();
+    case "analyze":
       return analyzeHtml();
+    default:
+      return teamHtml();
   }
 }
 
@@ -1521,6 +1840,9 @@ function setView(v: SiteView): void {
   }
   if (state.view === "rubric") {
     readRubricAlignForm();
+  }
+  if (state.view === "llm") {
+    readLlmCompareForm();
   }
   state.view = v;
   void refreshHealth().then(() => {
@@ -1611,6 +1933,10 @@ function wire(): void {
 
   document.getElementById("btn-ra-run")?.addEventListener("click", () => {
     void submitRubricAlign();
+  });
+
+  document.getElementById("btn-llm-run")?.addEventListener("click", () => {
+    void submitLlmCompare();
   });
 }
 

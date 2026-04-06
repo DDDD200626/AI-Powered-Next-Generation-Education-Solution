@@ -11,6 +11,18 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from edu_tools.team_advanced import (
+    AnomalyAlert,
+    CollaborationEdgeIn,
+    MismatchItem,
+    NetworkGraph,
+    build_network,
+    compute_anomalies,
+    compute_mismatches,
+    heuristic_roles,
+    openai_enrich_advanced,
+)
+
 router = APIRouter()
 
 
@@ -30,6 +42,12 @@ class MemberIn(BaseModel):
     self_report: str = ""
     peer_notes: str = ""
     timeline: list[TimelinePointIn] = Field(default_factory=list)
+    outcome_score: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="프로젝트/발표/동료 평가 등 결과 점수(선택, 기여 추정과 비교)",
+    )
 
 
 class TeamEvaluateRequest(BaseModel):
@@ -37,6 +55,10 @@ class TeamEvaluateRequest(BaseModel):
     project_description: str = ""
     evaluation_criteria: str = ""
     members: list[MemberIn] = Field(..., min_length=1)
+    collaboration_edges: list[CollaborationEdgeIn] = Field(
+        default_factory=list,
+        description="팀원 간 상호작용(리뷰·회의·페어 등). 없으면 기여도 기반 완전 그래프로 추정",
+    )
 
 
 class DimensionScores(BaseModel):
@@ -63,6 +85,11 @@ class MemberOut(BaseModel):
     free_rider_signals: list[str] = Field(default_factory=list)
     ai_feedback: str = ""
     timeline: list[TimelinePointOut] = Field(default_factory=list)
+    contribution_type_label: str = Field("", description="개발형·문서형·리더형·서포터형")
+    role_scores: dict[str, float] = Field(
+        default_factory=dict,
+        description="dev, doc, leader, supporter 합산 100 근사",
+    )
 
 
 class TeamEvaluateResponse(BaseModel):
@@ -70,8 +97,14 @@ class TeamEvaluateResponse(BaseModel):
     members: list[MemberOut]
     fairness_notes: str = ""
     free_rider_summary: str = ""
+    collaboration_network: NetworkGraph = Field(default_factory=NetworkGraph)
+    contribution_outcome_summary: str = ""
+    mismatches: list[MismatchItem] = Field(default_factory=list)
+    anomaly_alerts: list[AnomalyAlert] = Field(default_factory=list)
+    advanced_mode: str = "heuristic"
     disclaimer: str = (
-        "자동 추정이며 최종 성적·인사 판단을 대체하지 않습니다. 무임승차 표시는 참고용이며 대면 확인이 필요합니다."
+        "팀 프로젝트 기여도 자동 평가(보조) 결과입니다. 최종 성적·인사 판단을 대체하지 않습니다. "
+        "무임승차·불일치·네트워크·이상 탐지는 추정이며 면담·추가 증거로 확인하세요."
     )
 
 
@@ -232,6 +265,61 @@ def _template_feedback(m: MemberOut) -> str:
     )
 
 
+def _attach_advanced(
+    req: TeamEvaluateRequest,
+    enriched: list[MemberOut],
+    suspected: list[bool],
+) -> tuple[list[MemberOut], NetworkGraph, list[MismatchItem], list[AnomalyAlert], str, str]:
+    names = [m.name for m in req.members]
+    cis = [mm.contribution_index for mm in enriched]
+    outcomes = [m.outcome_score for m in req.members]
+
+    out_members: list[MemberOut] = []
+    for i, mem in enumerate(req.members):
+        c = float(mem.commits or 0)
+        l_ = float(mem.lines_changed or 0)
+        pr = float(mem.pull_requests or 0)
+        t = float(mem.tasks_completed or 0)
+        meet = float(mem.meetings_attended or 0)
+        words = float(max(0, len((mem.self_report or "").split())))
+        en = enriched[i]
+        dim = en.dimensions
+        label, scores = heuristic_roles(
+            c, l_, pr, t, meet, words, dim.technical, dim.collaboration, dim.initiative
+        )
+        out_members.append(
+            en.model_copy(update={"contribution_type_label": label, "role_scores": scores})
+        )
+
+    mm, summary = compute_mismatches(names, cis, outcomes)
+    net = build_network(names, cis, req.collaboration_edges)
+    anom = compute_anomalies(names, cis, suspected, mm, net.edges)
+
+    advanced_mode = "heuristic"
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if key:
+        try:
+            project = {
+                "name": req.project_name,
+                "description": req.project_description,
+                "criteria": req.evaluation_criteria,
+            }
+            members_payload = [m.model_dump() for m in req.members]
+            heuristic_bundle = {
+                "mismatch_summary": summary[:2000],
+                "role_labels": [m.contribution_type_label for m in out_members],
+            }
+            data = openai_enrich_advanced(project, members_payload, heuristic_bundle, key)
+            comment = str(data.get("contribution_outcome_comment") or "").strip()
+            if comment:
+                summary = comment + "\n\n" + summary
+            advanced_mode = "openai_enriched"
+        except Exception:
+            pass
+
+    return out_members, net, mm, anom, summary, advanced_mode
+
+
 def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_key: str) -> list[str]:
     from openai import OpenAI
 
@@ -310,16 +398,23 @@ def _finalize_members(
         enriched = [mm.model_copy(update={"ai_feedback": _template_feedback(mm)}) for mm in enriched]
 
     n_sus = sum(1 for m in enriched if m.free_rider_suspected)
-    summary = (
+    fr_summary = (
         f"자동 탐지: 무임승차 의심 플래그 {n_sus}명. "
         "표시는 통계·키워드 기반이며, 최종 판단은 교수·팀 면담으로 하세요."
     )
 
+    out_members, net, mm, anom, co_summary, adv_mode = _attach_advanced(req, enriched, suspected)
+
     return TeamEvaluateResponse(
         mode=mode,
-        members=enriched,
+        members=out_members,
         fairness_notes=fairness_notes,
-        free_rider_summary=summary,
+        free_rider_summary=fr_summary,
+        collaboration_network=net,
+        contribution_outcome_summary=co_summary,
+        mismatches=mm,
+        anomaly_alerts=anom,
+        advanced_mode=adv_mode,
     )
 
 
