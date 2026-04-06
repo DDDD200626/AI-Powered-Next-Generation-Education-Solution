@@ -58,12 +58,20 @@ interface TeamMemberRow {
   meetings_attended: string;
   self_report: string;
   peer_notes: string;
+  /** 주차별 활동(선택): 입력 시 타임라인에 반영 */
+  timeline: { period_label: string; activity_score: string }[];
 }
 
 interface TeamDimensionScores {
   technical: number;
   collaboration: number;
   initiative: number;
+}
+
+interface TimelinePointOut {
+  period_label: string;
+  share_percent: number;
+  activity_score?: number | null;
 }
 
 interface TeamMemberOut {
@@ -73,12 +81,18 @@ interface TeamMemberOut {
   dimensions: TeamDimensionScores;
   evidence_summary?: string;
   caveats?: string;
+  free_rider_suspected?: boolean;
+  free_rider_risk?: number;
+  free_rider_signals?: string[];
+  ai_feedback?: string;
+  timeline?: TimelinePointOut[];
 }
 
 interface TeamEvaluateResponse {
   mode: string;
   members: TeamMemberOut[];
   fairness_notes?: string;
+  free_rider_summary?: string;
   disclaimer?: string;
 }
 
@@ -130,6 +144,10 @@ interface RubricAlignResponse {
   disclaimer?: string;
 }
 
+function emptyTimelineRow(): { period_label: string; activity_score: string } {
+  return { period_label: "", activity_score: "" };
+}
+
 function emptyTeamMember(): TeamMemberRow {
   return {
     name: "",
@@ -141,6 +159,12 @@ function emptyTeamMember(): TeamMemberRow {
     meetings_attended: "",
     self_report: "",
     peer_notes: "",
+    timeline: [
+      emptyTimelineRow(),
+      emptyTimelineRow(),
+      emptyTimelineRow(),
+      emptyTimelineRow(),
+    ],
   };
 }
 
@@ -391,6 +415,10 @@ function readTeamForm(): void {
     meetings_attended: g(`tm_meet_${i}`)?.value ?? "",
     self_report: g(`tm_self_${i}`)?.value ?? "",
     peer_notes: g(`tm_peer_${i}`)?.value ?? "",
+    timeline: [0, 1, 2, 3].map((j) => ({
+      period_label: g(`tm_tl_p_${i}_${j}`)?.value ?? "",
+      activity_score: g(`tm_tl_s_${i}_${j}`)?.value ?? "",
+    })),
   }));
 }
 
@@ -403,17 +431,29 @@ async function submitTeam(): Promise<void> {
 
   const members = state.team.members
     .filter((m) => m.name.trim())
-    .map((m) => ({
-      name: m.name.trim(),
-      role: m.role.trim(),
-      commits: parseOptInt(m.commits),
-      pull_requests: parseOptInt(m.pull_requests),
-      lines_changed: parseOptInt(m.lines_changed),
-      tasks_completed: parseOptInt(m.tasks_completed),
-      meetings_attended: parseOptInt(m.meetings_attended),
-      self_report: m.self_report,
-      peer_notes: m.peer_notes,
-    }));
+    .map((m) => {
+      const timeline = (m.timeline || [])
+        .filter((row) => row.period_label.trim())
+        .map((row) => {
+          const n = parseFloat(row.activity_score.trim());
+          return Number.isFinite(n)
+            ? { period_label: row.period_label.trim(), activity_score: Math.min(100, Math.max(0, n)) }
+            : null;
+        })
+        .filter((x): x is { period_label: string; activity_score: number } => x !== null);
+      return {
+        name: m.name.trim(),
+        role: m.role.trim(),
+        commits: parseOptInt(m.commits),
+        pull_requests: parseOptInt(m.pull_requests),
+        lines_changed: parseOptInt(m.lines_changed),
+        tasks_completed: parseOptInt(m.tasks_completed),
+        meetings_attended: parseOptInt(m.meetings_attended),
+        self_report: m.self_report,
+        peer_notes: m.peer_notes,
+        timeline,
+      };
+    });
 
   if (!state.team.project_name.trim() || members.length === 0) {
     state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
@@ -865,6 +905,16 @@ function aboutHtml(): string {
 }
 
 function teamMemberBlock(i: number, m: TeamMemberRow): string {
+  const tl = m.timeline?.length ? m.timeline : [0, 1, 2, 3].map(() => emptyTimelineRow());
+  const timelineRows = tl.slice(0, 4).map((row, j) => {
+    const p = row.period_label ?? "";
+    const s = row.activity_score ?? "";
+    return `
+    <div class="grid-2">
+      <div><label class="lbl">기간 ${j + 1}</label><input class="txt" id="tm_tl_p_${i}_${j}" placeholder="예: 3주차" value="${escapeHtml(p)}" /></div>
+      <div><label class="lbl">활동 0–100</label><input class="txt" id="tm_tl_s_${i}_${j}" type="number" min="0" max="100" step="0.1" value="${escapeHtml(s)}" /></div>
+    </div>`;
+  });
   return `
   <div class="member-block hud-panel" data-member-idx="${i}">
     <h4 class="subh">멤버 ${i + 1}</h4>
@@ -879,6 +929,11 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
       <div><label class="lbl">완료 태스크</label><input class="txt" id="tm_tasks_${i}" type="number" min="0" value="${escapeHtml(m.tasks_completed)}" /></div>
       <div><label class="lbl">회의 출석</label><input class="txt" id="tm_meet_${i}" type="number" min="0" value="${escapeHtml(m.meetings_attended)}" /></div>
     </div>
+    <details class="timeline-details">
+      <summary>주차별 활동 점수 (선택, 무임승차·타임라인에 반영)</summary>
+      <p class="muted small">같은 주차 라벨을 팀원 간에 맞추면 비교가 쉽습니다. 비우면 서버가 가상 시계열을 생성합니다.</p>
+      ${timelineRows.join("")}
+    </details>
     <label class="lbl">자기 서술</label>
     <textarea class="txt" id="tm_self_${i}" rows="2">${escapeHtml(m.self_report)}</textarea>
     <label class="lbl">동료 메모</label>
@@ -886,28 +941,124 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
   </div>`;
 }
 
+function teamTimelineSvg(members: TeamMemberOut[]): string {
+  const sample = members.find((m) => m.timeline && m.timeline.length);
+  if (!sample?.timeline?.length) return "";
+  const labels = sample.timeline.map((t) => t.period_label);
+  const n = members.length;
+  const k = labels.length;
+  const W = 560;
+  const H = 240;
+  const padL = 44;
+  const padR = 12;
+  const padT = 14;
+  const padB = 40;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+  const colors = ["#00f0ff", "#ff2d95", "#a855f7", "#00ffa3", "#ffd000", "#ff8866"];
+  let maxY = 40;
+  for (const m of members) {
+    for (const p of m.timeline || []) {
+      maxY = Math.max(maxY, p.share_percent);
+    }
+  }
+  maxY = Math.min(100, Math.ceil(maxY / 10) * 10 + 5);
+
+  const lines: string[] = [];
+  for (let mi = 0; mi < n; mi++) {
+    const tl = members[mi].timeline || [];
+    if (tl.length === 0) continue;
+    const color = colors[mi % colors.length];
+    const coords = tl.map((p, t) => {
+      const x = k === 1 ? padL + chartW / 2 : padL + (t / Math.max(1, k - 1)) * chartW;
+      const y = padT + chartH - (p.share_percent / maxY) * chartH;
+      return `${x},${y}`;
+    });
+    if (coords.length === 1) {
+      const [cx, cy] = coords[0].split(",").map(Number);
+      lines.push(`<circle cx="${cx}" cy="${cy}" r="5" fill="${color}" />`);
+    } else {
+      lines.push(
+        `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${coords.join(" ")}" />`
+      );
+    }
+  }
+
+  const xLabels = labels
+    .map((lab, t) => {
+      const x = k === 1 ? padL + chartW / 2 : padL + (t / Math.max(1, k - 1)) * chartW;
+      return `<text x="${x}" y="${H - 12}" text-anchor="middle" fill="#7a8aa0" font-size="10">${escapeHtml(lab)}</text>`;
+    })
+    .join("");
+
+  const legend = members
+    .map(
+      (m, i) =>
+        `<span class="timeline-legend-item" style="color:${colors[i % colors.length]}">● ${escapeHtml(m.name)}</span>`
+    )
+    .join(" ");
+
+  return `
+  <div class="timeline-chart-wrap hud-panel">
+    <h3 class="subh">기여도 변화 (시간에 따른 팀 내 상대 비중 %)</h3>
+    <p class="muted small legend-line">${legend}</p>
+    <svg class="timeline-chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="기여도 타임라인">
+      <rect x="${padL}" y="${padT}" width="${chartW}" height="${chartH}" fill="rgba(16,20,28,0.4)" stroke="var(--border)" stroke-width="1" rx="2"/>
+      ${lines.join("")}
+      ${xLabels}
+    </svg>
+  </div>`;
+}
+
 function teamResultHtml(): string {
   const res = state.team.result;
   if (!res) return "";
   const rows = res.members
-    .map(
-      (m) => `
-    <tr>
-      <td>${escapeHtml(m.name)}</td>
+    .map((m) => {
+      const sus = m.free_rider_suspected
+        ? `<span class="free-rider-badge" title="자동 의심">무임승차 의심</span>`
+        : `<span class="pill pill-muted">—</span>`;
+      const risk = m.free_rider_risk != null ? m.free_rider_risk.toFixed(0) : "—";
+      return `
+    <tr class="${m.free_rider_suspected ? "row-suspected" : ""}">
+      <td>${escapeHtml(m.name)} ${sus}</td>
       <td>${m.contribution_index.toFixed(1)}</td>
+      <td>${risk}</td>
       <td>${m.dimensions.technical.toFixed(0)} / ${m.dimensions.collaboration.toFixed(0)} / ${m.dimensions.initiative.toFixed(0)}</td>
       <td class="muted small">${escapeHtml(m.evidence_summary || "")}</td>
-    </tr>`
+    </tr>`;
+    })
+    .join("");
+  const sigBlock = res.members
+    .filter((m) => m.free_rider_signals?.length)
+    .map(
+      (m) =>
+        `<p class="signal-line"><strong>${escapeHtml(m.name)}</strong>: ${(m.free_rider_signals || []).map((s) => escapeHtml(s)).join(" · ")}</p>`
     )
     .join("");
+  const feedbackBlocks = res.members
+    .map(
+      (m) => `
+    <article class="member-feedback-card hud-panel">
+      <h4>${escapeHtml(m.name)}${m.free_rider_suspected ? ` <span class="free-rider-badge">의심</span>` : ""}</h4>
+      <p class="prose feedback-text">${escapeHtml(m.ai_feedback || "")}</p>
+    </article>`
+    )
+    .join("");
+  const chart = teamTimelineSvg(res.members);
   return `
   <section class="panel panel-result hud-panel">
     <h2>결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span></h2>
     ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
+    ${res.free_rider_summary ? `<p class="prose free-rider-summary">${escapeHtml(res.free_rider_summary)}</p>` : ""}
+    ${sigBlock ? `<div class="signals-box">${sigBlock}</div>` : ""}
     <table class="data-table">
-      <thead><tr><th>이름</th><th>기여 지수</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
+      <thead><tr><th>이름</th><th>기여 지수</th><th>의심도</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    ${chart}
+    <h3 class="subh">팀원별 AI 피드백</h3>
+    <div class="member-feedback-grid">${feedbackBlocks}</div>
     <p class="footer-note muted small">${escapeHtml(res.disclaimer || "")}</p>
   </section>`;
 }
@@ -918,7 +1069,7 @@ function teamHtml(): string {
   <div class="page page-animate analyze-page">
     <p class="eyebrow">팀 프로젝트</p>
     <h1 class="page-title">기여도 초안</h1>
-    <p class="lead analyze-lead">OpenAI 키가 있으면 서술을 반영한 JSON 분석, 없으면 정량 휴리스틱만 사용합니다.</p>
+    <p class="lead analyze-lead">무임승차 의심·기여 타임라인·팀원별 피드백이 자동 생성됩니다. OpenAI 키가 있으면 기여 평가와 피드백 문장 품질이 올라갑니다.</p>
 
     <section class="panel hud-panel">
       <div class="grid-2">

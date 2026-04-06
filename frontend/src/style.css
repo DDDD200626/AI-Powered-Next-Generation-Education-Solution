@@ -1088,6 +1088,90 @@ textarea.txt {
   margin-bottom: 1rem;
 }
 
+.timeline-details {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.timeline-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-family: var(--font-hud), var(--font);
+}
+
+.timeline-chart-wrap {
+  margin: 1.25rem 0;
+}
+
+.timeline-chart {
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  display: block;
+}
+
+.timeline-legend-item {
+  margin-right: 1rem;
+  font-size: 0.85rem;
+}
+
+.legend-line {
+  margin-bottom: 0.5rem;
+}
+
+.free-rider-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-family: var(--font-hud), var(--font);
+  color: var(--danger);
+  border: 1px solid rgba(255, 68, 102, 0.5);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.data-table tr.row-suspected td {
+  background: rgba(255, 68, 102, 0.06);
+}
+
+.free-rider-summary {
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--warn);
+  background: rgba(255, 208, 0, 0.06);
+}
+
+.signals-box {
+  margin: 0.75rem 0;
+  font-size: 0.88rem;
+}
+
+.signal-line {
+  margin: 0.35rem 0;
+}
+
+.member-feedback-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 720px) {
+  .member-feedback-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.member-feedback-card h4 {
+  margin-top: 0;
+}
+
+.feedback-text {
+  white-space: pre-wrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
