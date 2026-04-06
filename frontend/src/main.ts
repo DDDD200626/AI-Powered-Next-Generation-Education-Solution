@@ -311,3 +311,9 @@ function init() {
 }
 
 init();
+
+/** 프로덕션에서만: Chrome 등 “앱 설치” 조건을 맞추기 위한 빈 서비스 워커 */
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  const base = import.meta.env.BASE_URL || "/";
+  void navigator.serviceWorker.register(`${base}sw.js`);
+}
