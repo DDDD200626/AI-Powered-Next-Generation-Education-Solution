@@ -9,7 +9,7 @@ function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-type SiteView = "home" | "analyze" | "about";
+type SiteView = "hub" | "analyze" | "team" | "at-risk" | "feedback" | "about";
 
 interface ProviderKeys {
   gemini?: boolean;
@@ -37,6 +37,81 @@ interface AnalyzeResponse {
   consensus_cheating_avg: number | null;
   consensus_summary: string;
   disclaimer: string;
+}
+
+interface TeamMemberRow {
+  name: string;
+  role: string;
+  commits: string;
+  pull_requests: string;
+  lines_changed: string;
+  tasks_completed: string;
+  meetings_attended: string;
+  self_report: string;
+  peer_notes: string;
+}
+
+interface TeamDimensionScores {
+  technical: number;
+  collaboration: number;
+  initiative: number;
+}
+
+interface TeamMemberOut {
+  name: string;
+  role?: string;
+  contribution_index: number;
+  dimensions: TeamDimensionScores;
+  evidence_summary?: string;
+  caveats?: string;
+}
+
+interface TeamEvaluateResponse {
+  mode: string;
+  members: TeamMemberOut[];
+  fairness_notes?: string;
+  disclaimer?: string;
+}
+
+interface WeekRow {
+  week_label: string;
+  engagement: string;
+  assessment_score: string;
+}
+
+interface AtRiskResponse {
+  mode: string;
+  dropout_risk: number;
+  trend_summary: string;
+  signals: string[];
+  intervention_suggestions: string;
+  disclaimer?: string;
+}
+
+interface FeedbackResponse {
+  mode: string;
+  draft_feedback: string;
+  strengths: string[];
+  improvements: string[];
+  disclaimer?: string;
+}
+
+function emptyTeamMember(): TeamMemberRow {
+  return {
+    name: "",
+    role: "",
+    commits: "",
+    pull_requests: "",
+    lines_changed: "",
+    tasks_completed: "",
+    meetings_attended: "",
+    self_report: "",
+    peer_notes: "",
+  };
+}
+
+function emptyWeekRow(): WeekRow {
+  return { week_label: "", engagement: "", assessment_score: "" };
 }
 
 function escapeHtml(s: string): string {
@@ -67,8 +142,34 @@ const state: {
   loading: boolean;
   error: string | null;
   health: { providers?: ProviderKeys } | null;
+  team: {
+    project_name: string;
+    project_description: string;
+    evaluation_criteria: string;
+    members: TeamMemberRow[];
+    result: TeamEvaluateResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
+  atRisk: {
+    course_name: string;
+    student_label: string;
+    weeks: WeekRow[];
+    notes: string;
+    result: AtRiskResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
+  feedback: {
+    rubric: string;
+    assignment_prompt: string;
+    submission: string;
+    result: FeedbackResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
 } = {
-  view: "home",
+  view: "hub",
   course_name: "",
   student_or_group_label: "",
   weekly_study_hours: "",
@@ -87,6 +188,32 @@ const state: {
   loading: false,
   error: null,
   health: null,
+  team: {
+    project_name: "",
+    project_description: "",
+    evaluation_criteria: "",
+    members: [emptyTeamMember(), emptyTeamMember()],
+    result: null,
+    loading: false,
+    error: null,
+  },
+  atRisk: {
+    course_name: "",
+    student_label: "",
+    weeks: [emptyWeekRow(), emptyWeekRow(), emptyWeekRow()],
+    notes: "",
+    result: null,
+    loading: false,
+    error: null,
+  },
+  feedback: {
+    rubric: "",
+    assignment_prompt: "",
+    submission: "",
+    result: null,
+    loading: false,
+    error: null,
+  },
 };
 
 function parseOptFloat(s: string): number | null {
@@ -165,6 +292,210 @@ async function submitAnalyze(): Promise<void> {
   render();
 }
 
+function readTeamForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.team.project_name = g("team_project_name")?.value ?? "";
+  state.team.project_description = g("team_project_description")?.value ?? "";
+  state.team.evaluation_criteria = g("team_evaluation_criteria")?.value ?? "";
+  state.team.members = state.team.members.map((_, i) => ({
+    name: g(`tm_name_${i}`)?.value ?? "",
+    role: g(`tm_role_${i}`)?.value ?? "",
+    commits: g(`tm_commits_${i}`)?.value ?? "",
+    pull_requests: g(`tm_pr_${i}`)?.value ?? "",
+    lines_changed: g(`tm_lines_${i}`)?.value ?? "",
+    tasks_completed: g(`tm_tasks_${i}`)?.value ?? "",
+    meetings_attended: g(`tm_meet_${i}`)?.value ?? "",
+    self_report: g(`tm_self_${i}`)?.value ?? "",
+    peer_notes: g(`tm_peer_${i}`)?.value ?? "",
+  }));
+}
+
+async function submitTeam(): Promise<void> {
+  readTeamForm();
+  state.team.error = null;
+  state.team.result = null;
+  state.team.loading = true;
+  render();
+
+  const members = state.team.members
+    .filter((m) => m.name.trim())
+    .map((m) => ({
+      name: m.name.trim(),
+      role: m.role.trim(),
+      commits: parseOptInt(m.commits),
+      pull_requests: parseOptInt(m.pull_requests),
+      lines_changed: parseOptInt(m.lines_changed),
+      tasks_completed: parseOptInt(m.tasks_completed),
+      meetings_attended: parseOptInt(m.meetings_attended),
+      self_report: m.self_report,
+      peer_notes: m.peer_notes,
+    }));
+
+  if (!state.team.project_name.trim() || members.length === 0) {
+    state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
+    state.team.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    project_name: state.team.project_name.trim(),
+    project_description: state.team.project_description,
+    evaluation_criteria: state.team.evaluation_criteria,
+    members,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/team/evaluate"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as TeamEvaluateResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.team.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.team.loading = false;
+      render();
+      return;
+    }
+    state.team.result = data;
+  } catch (e) {
+    state.team.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.team.loading = false;
+  }
+  render();
+}
+
+function readAtRiskForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.atRisk.course_name = g("ar_course")?.value ?? "";
+  state.atRisk.student_label = g("ar_student")?.value ?? "";
+  state.atRisk.notes = g("ar_notes")?.value ?? "";
+  state.atRisk.weeks = state.atRisk.weeks.map((_, i) => ({
+    week_label: g(`ar_week_${i}`)?.value ?? "",
+    engagement: g(`ar_eng_${i}`)?.value ?? "",
+    assessment_score: g(`ar_as_${i}`)?.value ?? "",
+  }));
+}
+
+async function submitAtRisk(): Promise<void> {
+  readAtRiskForm();
+  state.atRisk.error = null;
+  state.atRisk.result = null;
+  state.atRisk.loading = true;
+  render();
+
+  const weeks = state.atRisk.weeks
+    .filter((w) => w.week_label.trim())
+    .map((w) => {
+      const eng = parseOptFloat(w.engagement);
+      if (eng === null) return null;
+      const row: { week_label: string; engagement: number; assessment_score?: number } = {
+        week_label: w.week_label.trim(),
+        engagement: eng,
+      };
+      const as = parseOptFloat(w.assessment_score);
+      if (as !== null) row.assessment_score = as;
+      return row;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  if (weeks.length === 0) {
+    state.atRisk.error = "주차 라벨과 참여 점수(0–100)를 한 줄 이상 입력하세요.";
+    state.atRisk.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    course_name: state.atRisk.course_name.trim(),
+    student_label: state.atRisk.student_label.trim(),
+    weeks,
+    notes: state.atRisk.notes,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/at-risk/evaluate"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as AtRiskResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.atRisk.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.atRisk.loading = false;
+      render();
+      return;
+    }
+    state.atRisk.result = data;
+  } catch (e) {
+    state.atRisk.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.atRisk.loading = false;
+  }
+  render();
+}
+
+function readFeedbackForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLTextAreaElement | null;
+  state.feedback.rubric = g("fb_rubric")?.value ?? "";
+  state.feedback.assignment_prompt = g("fb_prompt")?.value ?? "";
+  state.feedback.submission = g("fb_submission")?.value ?? "";
+}
+
+async function submitFeedback(): Promise<void> {
+  readFeedbackForm();
+  state.feedback.error = null;
+  state.feedback.result = null;
+  state.feedback.loading = true;
+  render();
+
+  if (!state.feedback.rubric.trim() || !state.feedback.submission.trim()) {
+    state.feedback.error = "루브릭과 제출물을 입력하세요.";
+    state.feedback.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    rubric: state.feedback.rubric.trim(),
+    assignment_prompt: state.feedback.assignment_prompt,
+    submission: state.feedback.submission,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/feedback/draft"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as FeedbackResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.feedback.error =
+        typeof d === "string"
+          ? d
+          : d && typeof d === "object" && "detail" in d
+            ? String((d as { detail: string }).detail)
+            : "요청 실패";
+      state.feedback.loading = false;
+      render();
+      return;
+    }
+    state.feedback.result = data;
+  } catch (e) {
+    state.feedback.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.feedback.loading = false;
+  }
+  render();
+}
+
 function providerPills(): string {
   const p = state.health?.providers;
   if (!p) return '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
@@ -178,10 +509,16 @@ function navHtml(): string {
   return `
   <header class="site-header">
     <div class="nav-inner">
-      <a href="#" class="brand" data-view="home" aria-label="홈">EduSignal</a>
+      <a href="#" class="brand brand-mark" data-view="hub" aria-label="홈">
+        <span class="brand-title">EduSignal</span>
+        <span class="brand-tag">ED · AI SOLUTION LAB</span>
+      </a>
       <nav class="nav" aria-label="주요 메뉴">
-        <button type="button" class="${cur("home")}" data-view="home">홈</button>
-        <button type="button" class="${cur("analyze")}" data-view="analyze">분석</button>
+        <button type="button" class="${cur("hub")}" data-view="hub">허브</button>
+        <button type="button" class="${cur("analyze")}" data-view="analyze">과정·시험</button>
+        <button type="button" class="${cur("team")}" data-view="team">팀</button>
+        <button type="button" class="${cur("at-risk")}" data-view="at-risk">이탈</button>
+        <button type="button" class="${cur("feedback")}" data-view="feedback">피드백</button>
         <button type="button" class="${cur("about")}" data-view="about">안내</button>
         <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
@@ -197,67 +534,238 @@ function footerHtml(): string {
         <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">저장소</a>
         · 교육 보조 도구이며 징계·단정에 사용할 수 없습니다.
       </p>
-      <p class="footer-muted">EduSignal — 학습 과정과 시험 불일치 다중 AI 분석</p>
+      <p class="footer-muted">EduSignal — 교육 현장 페인 포인트를 AI로 보조하는 도구 모음</p>
     </div>
   </footer>`;
 }
 
-function homeHtml(): string {
+function hubHtml(): string {
   return `
-  <div class="page home-page">
-    <section class="hero-block">
-      <p class="eyebrow">Next-Gen Education · Multi-LLM</p>
-      <h1>학습은 낮은데 시험만 높을 때,<br />데이터와 AI가 함께 짚어봅니다.</h1>
-      <p class="hero-text">
-        LMS·과제·출석 등 <strong>과정 지표</strong>와 <strong>시험 결과</strong>를 넣으면
-        Gemini · ChatGPT · Claude · Grok이 병렬로 불일치를 해석하고, 부정행위 <em>의심 수준</em>·학습 상태·미래 위험을 제안합니다.
+  <div class="page page-animate home-page">
+    <section class="hero-block home-hero-main">
+      <p class="eyebrow">Education × AI</p>
+      <h1 class="home-headline">도구 허브</h1>
+      <p class="hero-text home-lead">
+        아래 네 가지는 <strong>실제 API</strong>와 연결되어 있습니다. 과정–시험 분석은 다중 LLM, 팀·이탈은 OpenAI 또는 휴리스틱, 피드백 초안은 OpenAI가 필요합니다.
       </p>
-      <div class="hero-actions">
-        <button type="button" class="btn btn-primary" data-view="analyze">분석 시작</button>
-        <button type="button" class="btn btn-ghost" data-view="about">이용 안내</button>
-      </div>
       <div class="pill-row hero-pills">${providerPills()}</div>
     </section>
 
-    <section class="section-block">
-      <h2 class="section-title">왜 여러 AI인가요</h2>
-      <div class="feature-grid">
-        <article class="feature-card">
-          <span class="feature-ico" aria-hidden="true">◇</span>
-          <h3>불일치 진단</h3>
-          <p>과정 대비 시험 편차가 클 때, 단순 수치만으로 놓치기 쉬운 패턴을 서술과 함께 봅니다.</p>
+    <section class="section-block hud-section home-section">
+      <h2 class="section-title">기능 선택</h2>
+      <div class="solution-grid">
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">다중 LLM</span>
+          <h3>과정 vs 시험 불일치</h3>
+          <p>LMS·과제 지표와 시험 점수를 넣어 부정행위 <em>의심도</em>·학습 상태·위험을 참고용으로 제시합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="analyze">열기</button>
         </article>
-        <article class="feature-card">
-          <span class="feature-ico" aria-hidden="true">◆</span>
-          <h3>학습 상태</h3>
-          <p>참여·이해·습관 측면에서 교육적으로 의미 있는 요약을 시도합니다.</p>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">팀</span>
+          <h3>팀 기여도 초안</h3>
+          <p>커밋·과제·자기·동료 서술을 바탕으로 기여 지수·차원 점수 초안을 만듭니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="team">열기</button>
         </article>
-        <article class="feature-card">
-          <span class="feature-ico" aria-hidden="true">○</span>
-          <h3>미래 예측</h3>
-          <p>이 패턴이 이어질 때 이후 시험·학습에 대한 위험·개선 방향을 짧게 예측합니다.</p>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">조기 경보</span>
+          <h3>학습 이탈 신호</h3>
+          <p>주차별 참여 점수를 넣어 위험 지수·개입 제안 초안을 봅니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="at-risk">열기</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">OpenAI</span>
+          <h3>과제 피드백 초안</h3>
+          <p>루브릭·제출물로 피드백 문단·강점·개선점 초안을 생성합니다. 교사 검수 후 전달하세요.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="feedback">열기</button>
         </article>
       </div>
-    </section>
-
-    <section class="section-block cta-block">
-      <h2 class="section-title">백엔드를 켜고 분석하세요</h2>
-      <p class="muted">로컬에서는 <code>uvicorn learning_analysis.main:app --port 8000</code> 후 이 페이지를 열면 API 키 상태가 위에 표시됩니다.</p>
-      <button type="button" class="btn btn-primary" data-view="analyze">입력 화면으로</button>
     </section>
   </div>`;
 }
 
 function aboutHtml(): string {
   return `
-  <div class="page about-page">
+  <div class="page page-animate about-page">
     <h1 class="page-title">이용 안내</h1>
     <div class="prose-block">
       <p><strong>목적.</strong> 교수·조교·기관의 <strong>의사결정 보조</strong>입니다. 부정행위 여부는 인간의 심사·증거·절차에 따릅니다.</p>
-      <p><strong>API 키.</strong> <code>backend/.env</code>에 Google(Gemini), OpenAI, Anthropic, xAI(Grok) 키를 넣으면 해당 모델이 함께 응답합니다. 키가 없으면 규칙 기반 휴리스틱만 사용됩니다.</p>
+      <p><strong>API 키.</strong> <code>backend/.env</code>에 Google(Gemini), OpenAI, Anthropic, xAI(Grok) 키를 넣으면 해당 모델이 응답합니다. 키가 없으면 과정–시험·팀·이탈은 휴리스틱을 씁니다. <strong>피드백 초안</strong>은 OpenAI 키가 필요합니다.</p>
       <p><strong>개인정보.</strong> 실명 대신 익명 라벨만 쓰는 것을 권장합니다.</p>
-      <p><strong>소스 코드.</strong> <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub 저장소</a>에서 확인·이슈·PR을 남길 수 있습니다.</p>
+      <p><strong>소스 코드.</strong> <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub 저장소</a></p>
     </div>
+  </div>`;
+}
+
+function teamMemberBlock(i: number, m: TeamMemberRow): string {
+  return `
+  <div class="member-block hud-panel" data-member-idx="${i}">
+    <h4 class="subh">멤버 ${i + 1}</h4>
+    <div class="grid-2">
+      <div><label class="lbl">이름</label><input class="txt" id="tm_name_${i}" value="${escapeHtml(m.name)}" /></div>
+      <div><label class="lbl">역할</label><input class="txt" id="tm_role_${i}" value="${escapeHtml(m.role)}" /></div>
+    </div>
+    <div class="grid-3">
+      <div><label class="lbl">커밋 수</label><input class="txt" id="tm_commits_${i}" type="number" min="0" value="${escapeHtml(m.commits)}" /></div>
+      <div><label class="lbl">PR 수</label><input class="txt" id="tm_pr_${i}" type="number" min="0" value="${escapeHtml(m.pull_requests)}" /></div>
+      <div><label class="lbl">변경 라인</label><input class="txt" id="tm_lines_${i}" type="number" min="0" value="${escapeHtml(m.lines_changed)}" /></div>
+      <div><label class="lbl">완료 태스크</label><input class="txt" id="tm_tasks_${i}" type="number" min="0" value="${escapeHtml(m.tasks_completed)}" /></div>
+      <div><label class="lbl">회의 출석</label><input class="txt" id="tm_meet_${i}" type="number" min="0" value="${escapeHtml(m.meetings_attended)}" /></div>
+    </div>
+    <label class="lbl">자기 서술</label>
+    <textarea class="txt" id="tm_self_${i}" rows="2">${escapeHtml(m.self_report)}</textarea>
+    <label class="lbl">동료 메모</label>
+    <textarea class="txt" id="tm_peer_${i}" rows="2">${escapeHtml(m.peer_notes)}</textarea>
+  </div>`;
+}
+
+function teamResultHtml(): string {
+  const res = state.team.result;
+  if (!res) return "";
+  const rows = res.members
+    .map(
+      (m) => `
+    <tr>
+      <td>${escapeHtml(m.name)}</td>
+      <td>${m.contribution_index.toFixed(1)}</td>
+      <td>${m.dimensions.technical.toFixed(0)} / ${m.dimensions.collaboration.toFixed(0)} / ${m.dimensions.initiative.toFixed(0)}</td>
+      <td class="muted small">${escapeHtml(m.evidence_summary || "")}</td>
+    </tr>`
+    )
+    .join("");
+  return `
+  <section class="panel panel-result hud-panel">
+    <h2>결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span></h2>
+    ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
+    <table class="data-table">
+      <thead><tr><th>이름</th><th>기여 지수</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="footer-note muted small">${escapeHtml(res.disclaimer || "")}</p>
+  </section>`;
+}
+
+function teamHtml(): string {
+  const blocks = state.team.members.map((m, i) => teamMemberBlock(i, m)).join("");
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">팀 프로젝트</p>
+    <h1 class="page-title">기여도 초안</h1>
+    <p class="lead analyze-lead">OpenAI 키가 있으면 서술을 반영한 JSON 분석, 없으면 정량 휴리스틱만 사용합니다.</p>
+
+    <section class="panel hud-panel">
+      <div class="grid-2">
+        <div>
+          <label class="lbl">프로젝트명</label>
+          <input class="txt" id="team_project_name" value="${escapeHtml(state.team.project_name)}" />
+        </div>
+      </div>
+      <label class="lbl">프로젝트 설명</label>
+      <textarea class="txt" id="team_project_description" rows="2">${escapeHtml(state.team.project_description)}</textarea>
+      <label class="lbl">평가 기준 (선택)</label>
+      <textarea class="txt" id="team_evaluation_criteria" rows="2">${escapeHtml(state.team.evaluation_criteria)}</textarea>
+      ${blocks}
+      <div class="row-actions">
+        <button type="button" class="btn btn-ghost" id="btn-team-add">멤버 추가</button>
+        <button type="button" class="btn btn-ghost" id="btn-team-remove" ${state.team.members.length <= 1 ? "disabled" : ""}>마지막 멤버 제거</button>
+        <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading ? "disabled" : ""}>
+          ${state.team.loading ? "처리 중…" : "평가 실행"}
+        </button>
+      </div>
+      ${state.team.error ? `<p class="err">${escapeHtml(state.team.error)}</p>` : ""}
+    </section>
+    ${teamResultHtml()}
+  </div>`;
+}
+
+function weekRowHtml(i: number, w: WeekRow): string {
+  return `
+  <div class="grid-3 member-block hud-panel" style="padding:1rem;margin-bottom:0.5rem;">
+    <div><label class="lbl">주차</label><input class="txt" id="ar_week_${i}" placeholder="예: 3주차" value="${escapeHtml(w.week_label)}" /></div>
+    <div><label class="lbl">참여 0–100</label><input class="txt" id="ar_eng_${i}" type="number" min="0" max="100" step="0.1" value="${escapeHtml(w.engagement)}" /></div>
+    <div><label class="lbl">소평가·퀴즈 (선택)</label><input class="txt" id="ar_as_${i}" type="number" min="0" max="100" step="0.1" value="${escapeHtml(w.assessment_score)}" /></div>
+  </div>`;
+}
+
+function atRiskResultHtml(): string {
+  const r = state.atRisk.result;
+  if (!r) return "";
+  const sig = r.signals.map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+  return `
+  <section class="panel panel-result hud-panel">
+    <h2>이탈·위험 지수 <span class="score-num">${r.dropout_risk.toFixed(1)}</span> / 100 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <p class="prose">${escapeHtml(r.trend_summary)}</p>
+    <h4>신호</h4>
+    <ul class="prose">${sig}</ul>
+    <h4>개입 제안</h4>
+    <p class="prose">${escapeHtml(r.intervention_suggestions)}</p>
+    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
+  </section>`;
+}
+
+function atRiskHtml(): string {
+  const weeks = state.atRisk.weeks.map((w, i) => weekRowHtml(i, w)).join("");
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">조기 경보</p>
+    <h1 class="page-title">학습 이탈 신호</h1>
+    <p class="lead analyze-lead">주차별 참여 지표를 입력하세요. OpenAI 키가 있으면 서술 요약이 붙습니다.</p>
+    <section class="panel hud-panel">
+      <div class="grid-2">
+        <div><label class="lbl">과목 (선택)</label><input class="txt" id="ar_course" value="${escapeHtml(state.atRisk.course_name)}" /></div>
+        <div><label class="lbl">학습자 라벨 (선택)</label><input class="txt" id="ar_student" value="${escapeHtml(state.atRisk.student_label)}" /></div>
+      </div>
+      ${weeks}
+      <div class="row-actions">
+        <button type="button" class="btn btn-ghost" id="btn-ar-add">주차 행 추가</button>
+        <button type="button" class="btn btn-ghost" id="btn-ar-remove" ${state.atRisk.weeks.length <= 1 ? "disabled" : ""}>마지막 행 제거</button>
+      </div>
+      <label class="lbl">추가 메모</label>
+      <textarea class="txt" id="ar_notes" rows="2">${escapeHtml(state.atRisk.notes)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-ar-run" ${state.atRisk.loading ? "disabled" : ""}>
+          ${state.atRisk.loading ? "분석 중…" : "평가 실행"}
+        </button>
+      </div>
+      ${state.atRisk.error ? `<p class="err">${escapeHtml(state.atRisk.error)}</p>` : ""}
+    </section>
+    ${atRiskResultHtml()}
+  </div>`;
+}
+
+function feedbackHtml(): string {
+  const r = state.feedback.result;
+  const resultBlock = r
+    ? `
+  <section class="panel panel-result hud-panel">
+    <h2>피드백 초안</h2>
+    <p class="prose">${escapeHtml(r.draft_feedback)}</p>
+    <h4>강점</h4>
+    <ul>${r.strengths.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+    <h4>개선</h4>
+    <ul>${r.improvements.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
+  </section>`
+    : "";
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">과제</p>
+    <h1 class="page-title">피드백 초안 생성</h1>
+    <p class="lead analyze-lead"><code>OPENAI_API_KEY</code>가 필요합니다.</p>
+    <section class="panel hud-panel">
+      <label class="lbl">루브릭·채점 기준</label>
+      <textarea class="txt" id="fb_rubric" rows="4">${escapeHtml(state.feedback.rubric)}</textarea>
+      <label class="lbl">과제 설명 (선택)</label>
+      <textarea class="txt" id="fb_prompt" rows="3">${escapeHtml(state.feedback.assignment_prompt)}</textarea>
+      <label class="lbl">학생 제출물</label>
+      <textarea class="txt" id="fb_submission" rows="8">${escapeHtml(state.feedback.submission)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-fb-run" ${state.feedback.loading ? "disabled" : ""}>
+          ${state.feedback.loading ? "생성 중…" : "초안 생성"}
+        </button>
+      </div>
+      ${state.feedback.error ? `<p class="err">${escapeHtml(state.feedback.error)}</p>` : ""}
+    </section>
+    ${resultBlock}
   </div>`;
 }
 
@@ -298,7 +806,7 @@ function resultSectionHtml(): string {
       ? `<p class="skipped muted small">건너뜀: ${escapeHtml(res.providers_skipped.join(" · "))}</p>`
       : "";
   return `
-  <section class="panel panel-result" id="results">
+  <section class="panel panel-result hud-panel" id="results">
     <h2>분석 결과</h2>
     <p class="prose">${escapeHtml(res.consensus_summary)}</p>
     ${avg}
@@ -310,13 +818,13 @@ function resultSectionHtml(): string {
 
 function analyzeHtml(): string {
   return `
-  <div class="page analyze-page">
+  <div class="page page-animate analyze-page">
     <p class="eyebrow">입력</p>
     <h1 class="page-title">과정 지표와 시험 점수</h1>
     <p class="lead analyze-lead">아래 항목을 채운 뒤 실행하세요. 상단 알약은 백엔드에 연결된 API 키 상태입니다.</p>
     <div class="pill-row">${providerPills()}</div>
 
-    <section class="panel">
+    <section class="panel hud-panel">
       <div class="grid-2">
         <div>
           <label class="lbl">과목명 (선택)</label>
@@ -389,10 +897,16 @@ function analyzeHtml(): string {
 
 function mainContentHtml(): string {
   switch (state.view) {
-    case "home":
-      return homeHtml();
+    case "hub":
+      return hubHtml();
     case "about":
       return aboutHtml();
+    case "team":
+      return teamHtml();
+    case "at-risk":
+      return atRiskHtml();
+    case "feedback":
+      return feedbackHtml();
     default:
       return analyzeHtml();
   }
@@ -402,7 +916,9 @@ function render(): void {
   const app = document.getElementById("app");
   if (!app) return;
   app.innerHTML = `
-  <div class="site">
+  <div class="site game-studio">
+    <div class="ambient-bg" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
     ${navHtml()}
     <main class="site-main">${mainContentHtml()}</main>
     ${footerHtml()}
@@ -432,6 +948,15 @@ function setView(v: SiteView): void {
   if (state.view === "analyze") {
     readForm();
   }
+  if (state.view === "team") {
+    readTeamForm();
+  }
+  if (state.view === "at-risk") {
+    readAtRiskForm();
+  }
+  if (state.view === "feedback") {
+    readFeedbackForm();
+  }
   state.view = v;
   void refreshHealth().then(() => {
     render();
@@ -455,6 +980,46 @@ function wire(): void {
   document.getElementById("btn-analyze")?.addEventListener("click", () => {
     readForm();
     void submitAnalyze();
+  });
+
+  document.getElementById("btn-team-add")?.addEventListener("click", () => {
+    readTeamForm();
+    state.team.members.push(emptyTeamMember());
+    state.view = "team";
+    render();
+  });
+
+  document.getElementById("btn-team-remove")?.addEventListener("click", () => {
+    readTeamForm();
+    if (state.team.members.length > 1) state.team.members.pop();
+    state.view = "team";
+    render();
+  });
+
+  document.getElementById("btn-team-run")?.addEventListener("click", () => {
+    void submitTeam();
+  });
+
+  document.getElementById("btn-ar-add")?.addEventListener("click", () => {
+    readAtRiskForm();
+    state.atRisk.weeks.push(emptyWeekRow());
+    state.view = "at-risk";
+    render();
+  });
+
+  document.getElementById("btn-ar-remove")?.addEventListener("click", () => {
+    readAtRiskForm();
+    if (state.atRisk.weeks.length > 1) state.atRisk.weeks.pop();
+    state.view = "at-risk";
+    render();
+  });
+
+  document.getElementById("btn-ar-run")?.addEventListener("click", () => {
+    void submitAtRisk();
+  });
+
+  document.getElementById("btn-fb-run")?.addEventListener("click", () => {
+    void submitFeedback();
   });
 }
 

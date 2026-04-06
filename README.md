@@ -1,17 +1,17 @@
-# EduSignal — 학습 과정 vs 시험 결과 불일치 분석 (다중 AI)
+# EduSignal — 교육 현장 페인 포인트 × AI
 
-과정 지표(LMS·캐퀴즈·과제·출석 등)와 시험 점수를 입력하면 **Google Gemini**, **OpenAI(ChatGPT)**, **Anthropic Claude**, **xAI Grok**이 병렬로 응답하여 다음을 **보조적으로** 제시합니다.
+교육 현장의 반복 과제(과정–시험 불일치, 팀 기여도, 이탈 조기 파악, 대규모 피드백)를 **보조**하기 위한 API와 웹 UI입니다. 출력은 **참고용**이며 징계·최종 성적을 대체하지 않습니다.
 
-## 사이트
+## 구현된 기능
 
-프론트엔드는 **홈 · 분석 · 안내** 화면과 GitHub 링크가 있는 단일 페이지 앱입니다. 로컬에서 백엔드와 함께 띄우면 API 키 연결 상태가 상단에 표시됩니다.
+| 영역 | 설명 |
+|------|------|
+| **과정 vs 시험** | Gemini, ChatGPT, Claude, Grok 병렬 분석 (`POST /api/analyze`). 키가 없으면 휴리스틱. |
+| **팀 기여도** | 정량·서술 입력 → 기여 지수·차원 점수 초안 (`POST /api/team/evaluate`). OpenAI 있으면 서술 반영, 없으면 휴리스틱. |
+| **이탈·위험** | 주차별 참여 점수 → 위험 지수·신호·개입 제안 (`POST /api/at-risk/evaluate`). |
+| **과제 피드백 초안** | 루브릭·제출물 → 피드백 문단 (`POST /api/feedback/draft`). **OpenAI 키 필수**. |
 
-- 과정–시험 **불일치** 해석  
-- **부정행위 의심도**(0–100, 단정 아님)  
-- **학습 상태** 요약  
-- **미래 예측**(이후 시험·학습 위험 등)
-
-API 키가 하나도 없으면 **규칙 기반 휴리스틱**만 실행됩니다.
+프론트엔드: **허브**에서 위 기능으로 이동 · **안내**에 운영 주의사항.
 
 ## 백엔드
 
@@ -19,22 +19,25 @@ API 키가 하나도 없으면 **규칙 기반 휴리스틱**만 실행됩니다
 cd backend
 pip install -r requirements.txt
 copy .env.example .env
-# GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY 중 필요한 것 설정
+# GOOGLE_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY 등 설정
 uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- `GET /api/health` — 어떤 제공자 키가 설정됐는지 여부  
-- `POST /api/analyze` — 본문 스키마는 `learning_analysis.schemas.AnalyzeRequest`  
+- `GET /api/health` — 제공자 키 설정 여부  
+- `POST /api/analyze` — `learning_analysis.schemas.AnalyzeRequest`  
+- `POST /api/team/evaluate` — 팀 기여도  
+- `POST /api/at-risk/evaluate` — 이탈 조기 경보  
+- `POST /api/feedback/draft` — 피드백 초안 (OpenAI 필요)  
 - 문서: `http://127.0.0.1:8000/docs`
 
 ### 환경 변수 요약
 
-| 키 | 모델 |
+| 키 | 용도 |
 |----|------|
 | `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY` | Gemini (`GEMINI_MODEL`, 기본 `gemini-2.0-flash`) |
-| `OPENAI_API_KEY` | ChatGPT API (`OPENAI_MODEL`, 기본 `gpt-4o-mini`) |
-| `ANTHROPIC_API_KEY` | Claude (`ANTHROPIC_MODEL`, 기본 `claude-3-5-sonnet-20241022`) |
-| `XAI_API_KEY` 또는 `GROK_API_KEY` | Grok (`GROK_MODEL`, 기본 `grok-2-latest`, `XAI_BASE_URL` 기본 `https://api.x.ai/v1`) |
+| `OPENAI_API_KEY` | ChatGPT — 팀·이탈·피드백 보조, 과정–시험 파이프라인 |
+| `ANTHROPIC_API_KEY` | Claude (`ANTHROPIC_MODEL`) |
+| `XAI_API_KEY` 또는 `GROK_API_KEY` | Grok (`GROK_MODEL`, `XAI_BASE_URL`) |
 
 ## 프론트엔드
 
@@ -44,10 +47,8 @@ npm install
 npm run dev
 ```
 
-`http://127.0.0.1:5173` — Vite가 `/api`를 백엔드로 프록시합니다.
-
-배포 시 API가 다른 도메인이면 `VITE_API_BASE`를 설정한 뒤 `npm run build` 하세요.
+`http://127.0.0.1:5173` — Vite가 `/api`를 백엔드로 프록시합니다. 배포 시 `VITE_API_BASE`를 설정한 뒤 `npm run build` 하세요.
 
 ## 주의
 
-본 시스템은 **교육 보조**용입니다. 부정행위 판정·징계는 인간의 심사와 절차에 따르며, 모델 출력은 오류·편향이 있을 수 있습니다.
+교육 **보조**용입니다. 부정행위 판정·징계는 인간의 심사와 절차에 따르며, 모델 출력에는 오류·편향이 있을 수 있습니다.
