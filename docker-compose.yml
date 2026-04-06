@@ -1,0 +1,19 @@
+# 공모전·데모용: 웹 + API 한 번에 기동
+# 사용: docker compose up --build
+# 웹: http://127.0.0.1:8080  API 직접: http://127.0.0.1:8000
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api

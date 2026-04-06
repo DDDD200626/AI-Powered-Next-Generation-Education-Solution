@@ -264,6 +264,64 @@ body {
   border-radius: 999px;
 }
 
+/* 공모전 심사 4축 (허브) */
+.contest-panel {
+  margin-bottom: 1.5rem;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid rgba(91, 143, 255, 0.22);
+  border-radius: var(--radius);
+  background: linear-gradient(165deg, rgba(91, 143, 255, 0.08) 0%, var(--surface) 55%);
+}
+
+.contest-lead {
+  margin: 0 0 1rem;
+  max-width: 72ch;
+}
+
+.contest-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 720px) {
+  .contest-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .contest-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.contest-card {
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+}
+
+.contest-card-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #9ec5ff;
+}
+
+.contest-card-body {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.contest-actions {
+  margin-top: 0.85rem !important;
+}
+
 .lead,
 .analyze-lead {
   font-size: 0.95rem;

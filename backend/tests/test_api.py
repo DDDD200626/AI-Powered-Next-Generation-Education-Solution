@@ -29,6 +29,20 @@ def test_version_endpoint() -> None:
     assert "/docs" in data.get("openapi_docs", "")
 
 
+def test_capabilities_contest_rubric() -> None:
+    r = client.get("/api/capabilities")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["version"]
+    rub = data["rubric"]
+    assert "technical_completeness" in rub
+    assert "ai_efficiency" in rub
+    assert "planning_practical" in rub
+    assert "creativity" in rub
+    assert data["endpoints"]["team_evaluate"] == "POST /api/team/evaluate"
+    assert r.headers.get("X-Request-ID")
+
+
 def test_team_evaluate_heuristic_has_creative_insights() -> None:
     body = {
         "project_name": "테스트 프로젝트",

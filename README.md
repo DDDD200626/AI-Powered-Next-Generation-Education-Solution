@@ -2,6 +2,18 @@
 
 팀 단위 과제에서 **정량·서술·주차별 활동**을 입력하면 **기여 지수**, **무임승차 의심**, **기여도 타임라인**, **팀원별 AI 피드백**을 자동 생성하는 **교육 보조** 웹·API입니다. 출력은 **참고용**이며 최종 평가·징계를 대체하지 않습니다.
 
+## 공모전·심사 제출용 (4개 기준 한눈에)
+
+| 심사 항목 | 한 줄 요약 | 바로가기 |
+|-----------|------------|----------|
+| 기술적 완성도 | FastAPI·Vite·OpenAPI·**CI·pytest**·요청 추적·**Docker** | [대응서 `docs/CONTEST_RUBRIC.md`](docs/CONTEST_RUBRIC.md) |
+| AI 활용 능력 및 효율성 | **다중 LLM 병렬**·팀 평가 **병렬 생성**·휴리스틱 폴백 | `learning_analysis/pipeline.py`, `edu_tools/team.py` |
+| 기획력 및 실무 접합성 | 팀 과제·조교 흐름·부가 도구·내보내기 | 웹 **부가 도구** 메뉴 |
+| 창의성 | 불일치·네트워크·**창의 인사이트**·시뮬레이터 | `POST /api/team/evaluate` 응답 |
+
+- **기계 판독 JSON**: `GET /api/capabilities` — 심사 4축·증빙 경로·엔드포인트 목록  
+- **심사위원용 상세 문서**: [`docs/CONTEST_RUBRIC.md`](docs/CONTEST_RUBRIC.md) (Mermaid 다이어그램 포함)
+
 ## 심사기준 부합 (요약)
 
 | 기준 | 본 솔루션에서의 근거 |
@@ -22,6 +34,19 @@
 | **과정 vs 시험** | `POST /api/analyze` — 다중 LLM 구조화 분석 |
 | **4AI 자유 비교** | `POST /api/llm/compare` — Gemini·ChatGPT·Claude·Grok 병렬 |
 | **이탈·피드백·QnA·토론·루브릭** | 각 `/api/...` (README 하단 백엔드 절 참고) |
+
+## Docker로 한 번에 실행 (공모전 시연·배포)
+
+[Docker](https://docs.docker.com/get-docker/) 설치 후 저장소 **루트**에서:
+
+```bash
+docker compose up --build
+```
+
+- **웹 (nginx → API 프록시)**: http://127.0.0.1:8080  
+- **API 직접**: http://127.0.0.1:8000/docs  
+
+API에 Gemini·OpenAI 등 키를 넣으려면 `backend/.env`를 만들고(`.env.example` 참고) `docker compose`에 `env_file`을 추가하거나, `api` 서비스에 환경 변수를 주입하세요.
 
 ## 한 번에 실행 (백엔드 + 프론트)
 
