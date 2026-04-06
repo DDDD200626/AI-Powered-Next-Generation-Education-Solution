@@ -1,104 +1,48 @@
-# ClassPulse AI — AI 활용 차세대 교육 솔루션
+# 팀 프로젝트 기여도 자동 평가 시스템
 
-교강사·수강생·교육 운영자의 **실무 페인**을 줄이기 위한 **AI 보조 레이어**입니다. (LMS·온라인 강의 플랫폼 구축과 무관)
+Git 수치·태스크·자기·동료 서술을 입력하면 **AI(OpenAI)** 또는 **휴리스틱**으로 팀원별 기여도 추정을 돌려줍니다. 교육 과제 보조용이며 최종 성적을 대체하지 않습니다.
 
-**공개 저장소:** [github.com/DDDD200626/AI-Education-Solution-Competition](https://github.com/DDDD200626/AI-Education-Solution-Competition)
+## 구성
 
-## 아키텍처
+- **백엔드**: `backend/` — FastAPI (`team_eval`)
+- **프론트엔드**: `frontend/` — Vite + TypeScript
 
-| 구분 | 기술 | 역할 |
-|------|------|------|
-| 백엔드 | FastAPI (`classpulse/api_app.py`) | JSON REST API, RAG 인덱스 로드, OpenAI 호출(서버 키만) |
-| 프론트엔드 | Vite + TypeScript (`frontend/`) | 탭 UI, `fetch`로 `/api/*` 호출 |
-| 코퍼스 | `classpulse/corpus/*.md` | TF-IDF 검색·답변·평가의 근거 범위 |
+## 실행
 
-```
-stock-predict/
-├── classpulse/          # Python 패키지 (도메인 로직 + API)
-│   ├── api_app.py       # FastAPI 앱 진입점
-│   ├── app.py           # 로컬: uvicorn 기동
-│   ├── rag.py           # 코퍼스 청킹·TF-IDF·답변 생성
-│   ├── comprehension.py # 이해도 AI 평가
-│   ├── integrity.py     # 무결성 휴리스틱·보조 설명
-│   ├── insights.py      # 운영·통합 대시보드 데이터/요약
-│   ├── teacher_feedback.py
-│   └── corpus/
-├── frontend/            # Vite SPA
-├── app.py               # (별도) 한국 주식 예측 CLI
-├── requirements.txt
-├── Procfile
-└── .env.example
-```
-
-## 기능 (역할별)
-
-| 역할 | 기능 |
-|------|------|
-| 수강생 | 코퍼스 범위 **TF-IDF 검색** → OpenAI **출처 번호 답변**; **이해도 점검** 리포트 |
-| 교강사 | **통합 대시보드**(이해도·무결성 구간); **루브릭 피드백 초안** |
-| 운영자 | 주차별 지표 CSV → **자연어 운영 요약** |
-| 무결성 보조 | 휴리스틱·자료 유사도·LLM **참고 설명**(적발·징계 단정 아님) |
-
-## 로컬 실행
-
-**터미널 A — 백엔드**
+### 1. 백엔드
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
+cd backend
 pip install -r requirements.txt
 copy .env.example .env
-python -m classpulse.app
+# .env에 OPENAI_API_KEY 설정 (선택)
+uvicorn team_eval.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-- API: http://127.0.0.1:8000  
-- Swagger: http://127.0.0.1:8000/docs  
-
-**터미널 B — 프론트** ([Node.js LTS](https://nodejs.org/) 설치 필요)
+### 2. 프론트엔드
 
 ```bash
 cd frontend
-npm install   # package-lock.json 으로 동일 버전 재현
+npm install
 npm run dev
 ```
 
-프로덕션 번들 확인: `npm run build` → `frontend/dist/` (저장소에는 `.gitignore`로 제외)
+브라우저에서 `http://127.0.0.1:5173` — 개발 시 Vite가 `/api`를 백엔드로 프록시합니다.
 
-Windows에서 `npm`은 되는데 `node`를 못 찾는다면, 터미널을 다시 열거나 PATH에 `C:\Program Files\nodejs` 가 포함됐는지 확인하세요.
+### API만 쓸 때
 
-- UI: http://127.0.0.1:5173 (개발 시 Vite가 `/api` → `8000` 프록시)
+`POST /api/evaluate`에 JSON 본문(`TeamEvaluateRequest` 스키마)을 보냅니다. OpenAPI 문서: `http://127.0.0.1:8000/docs`
 
-#### PWA — 앱처럼 설치 (홈 화면 / 브라우저 “앱 설치”)
+### 빌드 배포
 
-`npm run build` 후 **HTTPS**로 배포된 사이트에서 **홈 화면에 추가** 또는 **앱 설치**를 사용하면 전체 화면(standalone)으로 쓸 수 있습니다. API는 여전히 백엔드가 제공해야 합니다(같은 도메인 Docker 배포면 별도 `VITE_API_BASE` 없이 가능).
-
-**앱 스토어용 네이티브 앱**은 [Capacitor](https://capacitorjs.com/) 등으로 이 프론트를 감싸는 추가 작업이 필요합니다.
-
-`OPENAI_API_KEY`는 **백엔드 환경변수**가 가장 안전합니다. 로컬·시연용으로 서버에 키가 없을 때는, 화면 상단에서 **브라우저 세션**에만 키를 저장해 요청 헤더로 전달할 수 있습니다(기본 허용). 공개 서비스에서는 `.env`에 `CLASSPULSE_ALLOW_CLIENT_OPENAI_KEY=0` 으로 끄는 것을 권장합니다.
-
-## 배포
-
-| 방식 | 설정 |
-|------|------|
-| **Docker (UI+API 한 포트)** | 저장소 루트에서 `docker build -t classpulse .` → `docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... classpulse` → 브라우저 `http://localhost:8000` |
-| API만 | `Procfile`의 `uvicorn classpulse.api_app:app`; `OPENAI_API_KEY`; 프론트가 다른 도메인이면 `CORS_ORIGINS` |
-| API+정적 UI (직접) | `frontend`에서 `npm ci && npm run build` 후 `FRONTEND_DIST=frontend/dist` |
-| 프론트 단독 호스팅 | 빌드 시 `VITE_API_BASE=https://백엔드-URL` |
-| Render | `render.yaml` Blueprint로 연결 후 대시보드에서 `OPENAI_API_KEY` 설정 |
-
-## CI
-
-GitHub에 푸시하면 `.github/workflows/ci.yml`이 Python 의존성·`api_app` import·`frontend` `npm ci`/`build`를 검증합니다.
-
-## 기존 주식 CLI (선택)
+프론트가 API와 다른 도메인이면 빌드 시 API 베이스를 지정합니다.
 
 ```bash
-python app.py --ticker 005930.KS --period 5y
+cd frontend
+set VITE_API_BASE=https://your-api.example.com
+npm run build
 ```
 
-## 제출 체크리스트 (공모전)
+## 라이선스
 
-- [ ] 저장소 public, API 키·`.env` 미커밋  
-- [ ] 배포 라이브 URL 동작  
-- [ ] AI 리포트 PDF, 개인정보 동의·참가 각서 PDF 메일 제출  
-- [ ] 제출 기한(04/13) 이후 불필요한 커밋 지양
+프로젝트 정책에 따릅니다.
