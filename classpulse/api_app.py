@@ -49,6 +49,31 @@ def _api_key() -> str:
     return (os.environ.get("OPENAI_API_KEY") or "").strip()
 
 
+def _client_openai_allowed() -> bool:
+    """서버 키가 없을 때 요청 헤더로 키를 받을지. 공개 배포에서는 0/false 로 끄세요."""
+    v = (os.environ.get("CLASSPULSE_ALLOW_CLIENT_OPENAI_KEY", "1")).strip().lower()
+    return v not in ("0", "false", "no", "off")
+
+
+def _effective_openai_key(request: Request) -> str:
+    """서버 환경변수 우선. 없고 허용 시 X-ClassPulse-OpenAI-Key 헤더."""
+    env_k = _api_key()
+    if env_k:
+        return env_k
+    if not _client_openai_allowed():
+        return ""
+    return (request.headers.get("X-ClassPulse-OpenAI-Key") or "").strip()
+
+
+def _openai_missing_user_message(request: Request) -> str:
+    if _client_openai_allowed():
+        return (
+            "OpenAI API 키가 없습니다. 서버에 OPENAI_API_KEY를 설정하거나, "
+            "화면 상단에서 브라우저 키를 입력·저장하세요."
+        )
+    return "서버에 OPENAI_API_KEY가 설정되지 않았습니다. 관리자에게 문의하세요."
+
+
 def _openai_error_message(err: BaseException) -> str:
     try:
         from openai import APIConnectionError, APIStatusError, AuthenticationError, RateLimitError
@@ -134,7 +159,14 @@ class CsvOrSampleBody(BaseModel):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "openai_configured": bool(_api_key())}
+    sk = bool(_api_key())
+    allow = _client_openai_allowed()
+    return {
+        "status": "ok",
+        "openai_configured": sk,
+        "client_openai_allowed": allow,
+        "client_openai_ui": allow and not sk,
+    }
 
 
 @app.post("/api/retrieve")
@@ -156,7 +188,7 @@ async def api_learn(request: Request, body: LearnBody):
     chunks = request.app.state.chunks
     vectorizer = request.app.state.vectorizer
     matrix = request.app.state.matrix
-    key = _api_key()
+    key = _effective_openai_key(request)
     hits = retrieve(body.query.strip(), chunks, vectorizer, matrix, top_k=body.top_k)
     out: dict = {
         "hits": [
@@ -167,7 +199,7 @@ async def api_learn(request: Request, body: LearnBody):
         "answer_error": None,
     }
     if not key:
-        out["answer_error"] = "서버에 OPENAI_API_KEY가 설정되지 않아 답변을 생성할 수 없습니다."
+        out["answer_error"] = _openai_missing_user_message(request)
         return out
     try:
         out["answer"] = generate_answer(body.query.strip(), hits, key)
@@ -183,7 +215,7 @@ async def api_comprehension(request: Request, body: ComprehensionBody):
     chunks = request.app.state.chunks
     vectorizer = request.app.state.vectorizer
     matrix = request.app.state.matrix
-    key = _api_key()
+    key = _effective_openai_key(request)
     q_for_ret = f"{body.question.strip()}\n\n학생 답변 요약 키워드: {body.answer.strip()[:400]}"
     hits = retrieve(q_for_ret, chunks, vectorizer, matrix, top_k=body.top_k)
     result: dict = {
@@ -195,7 +227,7 @@ async def api_comprehension(request: Request, body: ComprehensionBody):
         "report_error": None,
     }
     if not key:
-        result["report_error"] = "서버에 OPENAI_API_KEY가 설정되지 않았습니다."
+        result["report_error"] = _openai_missing_user_message(request)
         return result
     try:
         result["report"] = assess_comprehension(body.question.strip(), body.answer.strip(), hits, key)
@@ -211,7 +243,7 @@ async def api_integrity(request: Request, body: IntegrityBody):
     chunks = request.app.state.chunks
     vectorizer = request.app.state.vectorizer
     matrix = request.app.state.matrix
-    key = _api_key()
+    key = _effective_openai_key(request)
     sig = heuristic_integrity_signals(body.submission)
     sim, src = answer_corpus_max_similarity(body.submission, chunks, vectorizer, matrix)
     hits_i = retrieve(body.submission.strip()[:2000], chunks, vectorizer, matrix, top_k=3)
@@ -225,7 +257,7 @@ async def api_integrity(request: Request, body: IntegrityBody):
         "narrative_error": None,
     }
     if not key:
-        out["narrative_error"] = "서버에 OPENAI_API_KEY가 설정되지 않았습니다."
+        out["narrative_error"] = _openai_missing_user_message(request)
         return out
     try:
         out["narrative"] = assess_integrity_llm(
@@ -240,12 +272,12 @@ async def api_integrity(request: Request, body: IntegrityBody):
 
 
 @app.post("/api/teacher-feedback")
-async def api_teacher_feedback(body: TeacherBody):
+async def api_teacher_feedback(request: Request, body: TeacherBody):
     if not body.submission.strip():
         raise HTTPException(status_code=400, detail="submission은 필수입니다.")
-    key = _api_key()
+    key = _effective_openai_key(request)
     if not key:
-        raise HTTPException(status_code=503, detail="서버에 OPENAI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=503, detail=_openai_missing_user_message(request))
     try:
         draft = generate_feedback_draft(body.submission.strip(), body.rubric, key)
         return {"draft": draft}
@@ -296,10 +328,10 @@ async def api_dashboard_preview(body: CsvOrSampleBody):
 
 
 @app.post("/api/dashboard/summarize")
-async def api_dashboard_summarize(body: CsvOrSampleBody):
-    key = _api_key()
+async def api_dashboard_summarize(request: Request, body: CsvOrSampleBody):
+    key = _effective_openai_key(request)
     if not key:
-        raise HTTPException(status_code=503, detail="서버에 OPENAI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=503, detail=_openai_missing_user_message(request))
     df, _note = _df_from_dashboard_body(body)
     try:
         summary = summarize_integrated_dashboard(df, key)
@@ -321,10 +353,10 @@ async def api_ops_preview(body: CsvOrSampleBody):
 
 
 @app.post("/api/ops/summarize")
-async def api_ops_summarize(body: CsvOrSampleBody):
-    key = _api_key()
+async def api_ops_summarize(request: Request, body: CsvOrSampleBody):
+    key = _effective_openai_key(request)
     if not key:
-        raise HTTPException(status_code=503, detail="서버에 OPENAI_API_KEY가 설정되지 않았습니다.")
+        raise HTTPException(status_code=503, detail=_openai_missing_user_message(request))
     df, _note = _df_from_ops_body(body)
     try:
         summary = summarize_for_admin(df, key)
