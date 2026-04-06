@@ -160,6 +160,13 @@ interface CreativeInsights {
   explain_facts: MemberExplainFact[];
   team_role_balance: TeamRoleBalance;
   reflection_kit: ReflectionKit;
+  team_health_score?: number;
+  team_health_hint?: string;
+}
+
+interface PracticalToolkit {
+  teacher_checklist: string[];
+  checklist_note?: string;
 }
 
 interface TeamEvaluateResponse {
@@ -173,6 +180,7 @@ interface TeamEvaluateResponse {
   anomaly_alerts?: AnomalyAlert[];
   advanced_mode?: string;
   creative_insights?: CreativeInsights;
+  practical_toolkit?: PracticalToolkit;
   request_id?: string;
   generated_at?: string;
   processing_ms?: number;
@@ -265,6 +273,50 @@ function emptyTeamMember(): TeamMemberRow {
       emptyTimelineRow(),
     ],
   };
+}
+
+/** 공모전 시연·심사용 샘플 팀 데이터 */
+function applyDemoTeamData(): void {
+  state.team.project_name = "데모: 풀스택 팀 프로젝트";
+  state.team.project_description = "공모전·시연용 샘플입니다. 실제 과제와 무관합니다.";
+  state.team.evaluation_criteria = DEFAULT_TEAM_EVALUATION_CRITERIA;
+  state.team.collaboration_edges_json = "";
+  const a = emptyTeamMember();
+  a.name = "김팀장";
+  a.role = "리더·백엔드";
+  a.commits = "42";
+  a.pull_requests = "8";
+  a.lines_changed = "2400";
+  a.tasks_completed = "7";
+  a.meetings_attended = "6";
+  a.outcome_score = "88";
+  a.self_report = "API 설계·코드 리뷰·스프린트 회의 진행을 맡았습니다.";
+  a.peer_notes = "리뷰가 빠릅니다.";
+  const b = emptyTeamMember();
+  b.name = "이프론트";
+  b.role = "프론트엔드";
+  b.commits = "35";
+  b.pull_requests = "10";
+  b.lines_changed = "1800";
+  b.tasks_completed = "7";
+  b.meetings_attended = "6";
+  b.outcome_score = "85";
+  b.self_report = "UI 구현, 접근성 개선, 스토리북 작성.";
+  b.peer_notes = "";
+  const c = emptyTeamMember();
+  c.name = "박문서";
+  c.role = "문서·기획";
+  c.commits = "8";
+  c.pull_requests = "3";
+  c.lines_changed = "240";
+  c.tasks_completed = "9";
+  c.meetings_attended = "7";
+  c.outcome_score = "82";
+  c.self_report = "요구사항 정리·회의록·사용자 가이드 작성.";
+  c.peer_notes = "";
+  state.team.members = [a, b, c];
+  state.team.result = null;
+  state.team.error = null;
 }
 
 function emptyWeekRow(): WeekRow {
@@ -534,6 +586,17 @@ function teamExportSummaryText(res: TeamEvaluateResponse): string {
     );
   });
   const ci = res.creative_insights;
+  if (ci?.team_health_score != null) {
+    lines.push("");
+    lines.push(`[팀 협업 건강도(참고)] ${ci.team_health_score.toFixed(1)} / 100`);
+    if (ci.team_health_hint) lines.push(ci.team_health_hint);
+  }
+  const pt = res.practical_toolkit;
+  if (pt?.teacher_checklist?.length) {
+    lines.push("");
+    lines.push("[교육자 실무 체크리스트]");
+    pt.teacher_checklist.forEach((x, i) => lines.push(`${i + 1}. ${x}`));
+  }
   if (ci?.reflection_kit?.team_storyline) {
     lines.push("");
     lines.push("[창의 인사이트 · 팀 스토리라인]");
@@ -1410,7 +1473,7 @@ function teamRoleRadarSvg(b: TeamRoleBalance): string {
   const n = 4;
   const grid = [0.25, 0.5, 0.75, 1].map(
     (t) =>
-      `<circle cx="${cx}" cy="${cy}" r="${rmax * t}" fill="none" stroke="#e2e8f0" stroke-width="1" />`
+      `<circle cx="${cx}" cy="${cy}" r="${rmax * t}" fill="none" stroke="#2a3547" stroke-width="1" />`
   );
   const axes = labels
     .map((lab, i) => {
@@ -1432,14 +1495,38 @@ function teamRoleRadarSvg(b: TeamRoleBalance): string {
   return `<svg class="radar-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-label="팀 평균 역할 밸런스">
     ${grid.join("")}
     ${axes}
-    <path d="${pathD}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2" />
+    <path d="${pathD}" fill="rgba(91,143,255,0.2)" stroke="#5b8fff" stroke-width="2" />
   </svg>`;
+}
+
+function teamPracticalPanelHtml(res: TeamEvaluateResponse): string {
+  const p = res.practical_toolkit;
+  if (!p?.teacher_checklist?.length) return "";
+  const items = p.teacher_checklist.map((i) => `<li>${escapeHtml(i)}</li>`).join("");
+  return `
+  <section class="practical-panel hud-panel" aria-labelledby="practical-heading">
+    <h3 class="subh" id="practical-heading">교육자 실무 체크리스트</h3>
+    <p class="muted small practical-note">${escapeHtml(p.checklist_note || "")}</p>
+    <ul class="practical-checklist">${items}</ul>
+  </section>`;
 }
 
 function teamCreativePanelHtml(res: TeamEvaluateResponse): string {
   const c = res.creative_insights;
   if (!c) return "";
   const rk = c.reflection_kit;
+  const hs = c.team_health_score;
+  const healthBlock =
+    hs != null
+      ? `<div class="team-health-meter" role="group" aria-label="팀 협업 건강도 참고">
+    <div class="team-health-top">
+      <span class="team-health-label">팀 협업 건강도 (참고)</span>
+      <span class="team-health-num">${hs.toFixed(1)}<span class="team-health-max">/100</span></span>
+    </div>
+    <div class="health-bar-wrap" aria-hidden="true"><div class="health-bar-fill" style="width:${Math.min(100, Math.max(0, hs))}%"></div></div>
+    <p class="muted small team-health-hint">${escapeHtml(c.team_health_hint || "")}</p>
+  </div>`
+      : "";
   const factsHtml = (c.explain_facts || [])
     .map(
       (x) => `
@@ -1453,6 +1540,7 @@ function teamCreativePanelHtml(res: TeamEvaluateResponse): string {
   <section class="creative-panel hud-panel" aria-labelledby="creative-heading">
     <h3 class="subh" id="creative-heading">창의 인사이트 · 설명 가능성 · 면담 키트</h3>
     <p class="muted small creative-lead">규칙 기반 자동 생성입니다. 징계·단정용이 아니라 <strong>교육·성찰·면담 준비</strong>용입니다.</p>
+    ${healthBlock}
     <div class="creative-grid">
       <div class="creative-col creative-col--story">
         <h4 class="creative-h4">팀 스토리라인</h4>
@@ -1616,6 +1704,7 @@ function teamResultHtml(): string {
       ? `<p class="result-meta muted small no-print" role="status">${metaParts.join(" · ")}</p>`
       : "";
   const creativeBlock = teamCreativePanelHtml(res);
+  const practicalBlock = teamPracticalPanelHtml(res);
   const simBlock = teamSimulatorHtml();
   return `
   <section class="panel panel-result hud-panel team-print-root" id="team-printable-root">
@@ -1629,6 +1718,7 @@ function teamResultHtml(): string {
     ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
     ${res.free_rider_summary ? `<p class="prose free-rider-summary">${escapeHtml(res.free_rider_summary)}</p>` : ""}
     ${creativeBlock}
+    ${practicalBlock}
     ${simBlock}
     ${coSummary}
     ${sigBlock ? `<div class="signals-box">${sigBlock}</div>` : ""}
@@ -1688,6 +1778,7 @@ function teamHtml(): string {
       <p class="muted small">source·target은 위 멤버 이름과 동일하게. weight는 0–100. 비우면 서버가 기여 지수로 간선을 추정합니다.</p>
       ${blocks}
       <div class="row-actions">
+        <button type="button" class="btn btn-ghost" id="btn-team-demo">데모 데이터 입력</button>
         <button type="button" class="btn btn-ghost" id="btn-team-add">멤버 추가</button>
         <button type="button" class="btn btn-ghost" id="btn-team-remove" ${state.team.members.length <= 1 ? "disabled" : ""}>마지막 멤버 제거</button>
         <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading ? "disabled" : ""}>
@@ -2226,6 +2317,13 @@ function wire(): void {
   document.getElementById("btn-analyze")?.addEventListener("click", () => {
     readForm();
     void submitAnalyze();
+  });
+
+  document.getElementById("btn-team-demo")?.addEventListener("click", () => {
+    applyDemoTeamData();
+    state.view = "team";
+    render();
+    scheduleTeamDraftSave();
   });
 
   document.getElementById("btn-team-add")?.addEventListener("click", () => {

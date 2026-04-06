@@ -84,5 +84,11 @@ def test_team_evaluate_heuristic_has_creative_insights() -> None:
     ci = data["creative_insights"]
     assert ci["reflection_kit"]["team_storyline"]
     assert len(ci["explain_facts"]) == 2
+    assert "team_health_score" in ci
+    assert 0 <= ci["team_health_score"] <= 100
+    assert ci.get("team_health_hint")
+    assert "practical_toolkit" in data
+    pt = data["practical_toolkit"]
+    assert len(pt["teacher_checklist"]) >= 3
     assert "request_id" in data
     assert r.headers.get("X-Request-ID")

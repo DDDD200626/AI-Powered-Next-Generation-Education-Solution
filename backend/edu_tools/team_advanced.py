@@ -11,6 +11,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+def _openai_timeout_sec() -> float:
+    raw = (os.environ.get("OPENAI_TIMEOUT_SEC") or "120").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 120.0
+    return max(5.0, min(600.0, v))
+
+
 class CollaborationEdgeIn(BaseModel):
     source: str = Field(..., min_length=1)
     target: str = Field(..., min_length=1)
@@ -231,7 +240,7 @@ def openai_enrich_advanced(
 }
 휴리스틱과 크게 다르지 않아도 되나, peer_notes·self_report 맥락을 반영하세요."""
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
     user = json.dumps(
         {"project": project, "members": members_payload, "heuristic": heuristic_bundle},
         ensure_ascii=False,
