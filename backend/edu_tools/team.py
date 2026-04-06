@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from edu_tools.team_advanced import (
     AnomalyAlert,
@@ -57,6 +57,43 @@ class MemberIn(BaseModel):
 
 
 class TeamEvaluateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "project_name": "2025-1 소프트웨어공학 팀프로젝트",
+                "project_description": "웹 기반 협업 도구 개발",
+                "evaluation_criteria": "기술 완성도, 협업, 창의성",
+                "members": [
+                    {
+                        "name": "홍길동",
+                        "role": "백엔드",
+                        "commits": 24,
+                        "pull_requests": 5,
+                        "lines_changed": 1200,
+                        "tasks_completed": 6,
+                        "meetings_attended": 4,
+                        "self_report": "API와 DB 설계를 담당했습니다.",
+                        "peer_notes": "",
+                        "timeline": [],
+                    },
+                    {
+                        "name": "김팀원",
+                        "role": "프론트엔드",
+                        "commits": 18,
+                        "pull_requests": 4,
+                        "lines_changed": 800,
+                        "tasks_completed": 5,
+                        "meetings_attended": 4,
+                        "self_report": "UI 구현과 테스트를 맡았습니다.",
+                        "peer_notes": "",
+                        "timeline": [],
+                    },
+                ],
+                "collaboration_edges": [],
+            }
+        }
+    )
+
     project_name: str = Field(..., min_length=1, max_length=300)
     project_description: str = Field("", max_length=12000)
     evaluation_criteria: str = Field("", max_length=16000)
@@ -142,6 +179,26 @@ class CreativeInsights(BaseModel):
     explain_facts: list[MemberExplainFact] = Field(default_factory=list)
     team_role_balance: TeamRoleBalanceOut = Field(default_factory=TeamRoleBalanceOut)
     reflection_kit: ReflectionKit = Field(default_factory=ReflectionKit)
+    team_health_score: float = Field(
+        0.0,
+        ge=0,
+        le=100,
+        description="팀 협업·기여 균형 추정 지수(높을수록 상대적으로 안정, 참고용)",
+    )
+    team_health_hint: str = Field(
+        "",
+        description="건강도 점수에 대한 한 줄 해설(교육·면담 참고)",
+    )
+
+
+class PracticalToolkit(BaseModel):
+    """기획·실무: 교육자 검수·운영 체크리스트."""
+
+    teacher_checklist: list[str] = Field(
+        default_factory=list,
+        description="조교·교수가 결과 활용 전 확인할 수 있는 항목",
+    )
+    checklist_note: str = "체크리스트는 참고용이며, 기관 규정·개인정보 보호를 우선합니다."
 
 
 class TeamEvaluateResponse(BaseModel):
@@ -156,7 +213,11 @@ class TeamEvaluateResponse(BaseModel):
     advanced_mode: str = "heuristic"
     creative_insights: CreativeInsights = Field(
         default_factory=CreativeInsights,
-        description="규칙 기반 설명 카드·팀 역할 밸런스·면담 질문·스토리라인",
+        description="규칙 기반 설명 카드·팀 역할 밸런스·면담 질문·스토리라인·팀 건강도",
+    )
+    practical_toolkit: PracticalToolkit = Field(
+        default_factory=PracticalToolkit,
+        description="교육자용 실무 체크리스트",
     )
     request_id: str = Field("", description="요청 추적용 UUID")
     generated_at: str = Field("", description="응답 생성 시각(UTC, ISO 8601)")
@@ -316,10 +377,67 @@ def _free_rider_analysis(
     return suspected, risks, signals
 
 
+def _compute_team_health(
+    n: int,
+    spread: float,
+    n_sus: int,
+    n_mismatch: int,
+    n_anom: int,
+) -> tuple[float, str]:
+    """팀 협업·기여 균형 추정(0–100, 참고용)."""
+    raw = 100.0
+    raw -= 10.0 * n_sus
+    raw -= min(22.0, spread * 0.22)
+    raw -= 5.0 * n_mismatch
+    raw -= 3.0 * n_anom
+    if n < 2:
+        raw = min(raw, 95.0)
+    score = max(0.0, min(100.0, round(raw, 1)))
+    if score >= 78:
+        hint = "팀 기여 분포와 신호가 비교적 안정적으로 보입니다. 면담에서 비가시 기여만 보완 확인하면 좋습니다."
+    elif score >= 52:
+        hint = "일부 편차·불일치·알림이 있습니다. 추가 증거·면담으로 교육적으로 보완하세요."
+    else:
+        hint = "편차·의심·불일치 신호가 많습니다. 팀 합의·역할 재정의·교육 개입을 검토하세요."
+    return score, hint
+
+
+def _build_practical_toolkit(
+    members: list[MemberOut],
+    mismatches: list[MismatchItem],
+    anomaly_alerts: list[AnomalyAlert],
+) -> PracticalToolkit:
+    """기획·실무: 교육자 검수용 체크리스트."""
+    items: list[str] = [
+        "자동 평가 결과를 학생에게 공유하기 전, 교수·조교가 내용과 톤을 검토했는가?",
+        "수업 목표·루브릭과 입력한 평가 기준이 일치하는지 확인했는가?",
+        "수치·AI 문장을 단정으로 사용하지 않고, 면담·추가 증거로 보완할 계획이 있는가?",
+        "결과 JSON·요약 복사본을 개인정보·저작권 정책에 맞게 보관·폐기할 것인가?",
+    ]
+    n_sus = sum(1 for m in members if m.free_rider_suspected)
+    if n_sus:
+        items.insert(
+            0,
+            f"무임승차 의심 플래그 {n_sus}건이 있습니다. 면담·활동 로그 요청을 기관 규정에 맞게 안내할 것인가?",
+        )
+    if mismatches:
+        items.insert(
+            min(1, len(items)),
+            "기여 추정과 결과 점수(발표·동료평가 등) 불일치가 있습니다. 추가 자료 요청 여부를 확인했는가?",
+        )
+    if anomaly_alerts:
+        items.insert(
+            min(2, len(items)),
+            f"고급 이상 알림이 {len(anomaly_alerts)}건 있습니다. 맥락을 면담에서 확인할 것인가?",
+        )
+    return PracticalToolkit(teacher_checklist=items[:12])
+
+
 def _build_creative_insights(
     req: TeamEvaluateRequest,
     members: list[MemberOut],
     mismatches: list[MismatchItem],
+    anomaly_alerts: list[AnomalyAlert],
 ) -> CreativeInsights:
     """규칙 기반 창의·설명 레이어. API 없이 항상 동작."""
     n = len(members)
@@ -332,6 +450,9 @@ def _build_creative_insights(
     bot_i = min(range(n), key=lambda i: cis[i])
     spread = max(cis) - min(cis)
     n_sus = sum(1 for m in members if m.free_rider_suspected)
+    health_score, health_hint = _compute_team_health(
+        n, spread, n_sus, len(mismatches), len(anomaly_alerts)
+    )
 
     explain_facts: list[MemberExplainFact] = []
     for i, mem in enumerate(members):
@@ -430,6 +551,8 @@ def _build_creative_insights(
         explain_facts=explain_facts,
         team_role_balance=team_balance,
         reflection_kit=reflection,
+        team_health_score=health_score,
+        team_health_hint=health_hint,
     )
 
 
@@ -502,6 +625,16 @@ def _try_openai_enrich(
     return summary, "heuristic"
 
 
+def _openai_timeout_sec() -> float:
+    """AI 호출 상한(초). 공모전·운영에서 무한 대기 방지."""
+    raw = (os.environ.get("OPENAI_TIMEOUT_SEC") or "120").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 120.0
+    return max(5.0, min(600.0, v))
+
+
 def _safe_openai_feedbacks(req: TeamEvaluateRequest, enriched: list[MemberOut], api_key: str) -> list[str]:
     try:
         return _openai_feedbacks(req, enriched, api_key)
@@ -531,7 +664,7 @@ def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_ke
 }
 비난하지 말고, 무임승차 의심이 있으면 사실 확인과 협업 개선을 권하는 톤으로 작성하세요."""
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
     res = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
@@ -600,7 +733,8 @@ def _finalize_members(
             for i in range(len(out_members))
         ]
 
-    creative = _build_creative_insights(req, out_members, mm)
+    creative = _build_creative_insights(req, out_members, mm, anom)
+    practical = _build_practical_toolkit(out_members, mm, anom)
 
     return TeamEvaluateResponse(
         mode=mode,
@@ -613,6 +747,7 @@ def _finalize_members(
         anomaly_alerts=anom,
         advanced_mode=adv_mode,
         creative_insights=creative,
+        practical_toolkit=practical,
     )
 
 
@@ -698,7 +833,7 @@ def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse
 }
 커밋 수만으로 순위 매기지 말고 self_report·peer_notes·timeline으로 비가시 기여를 반영하세요."""
 
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
     res = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
