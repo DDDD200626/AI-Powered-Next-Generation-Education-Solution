@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from typing import Any
 
 try:
     from dotenv import load_dotenv
@@ -36,10 +37,10 @@ def _cors_origins() -> list[str]:
 
 
 _APP_DESC = """## 심사기준 정렬
-- **기술적 완성도**: FastAPI 백엔드·Vite 프론트, 구조화된 응답, 팀 평가·고급 분석(네트워크·불일치·역할·이상 탐지), `/docs` 문서, **요청 추적 ID(`X-Request-ID`)**, **CI·pytest 회귀 테스트**, **`/api/version`**.
-- **AI 활용 능력 및 효율성**: 팀 평가·피드백에 생성형 보강(선택), 다중 LLM 파이프라인(`/api/analyze`) **asyncio 병렬**, 4모델 병렬(`/api/llm/compare`), 키 없을 때 휴리스틱 폴백, 팀 평가 시 OpenAI **ThreadPoolExecutor 병렬** 피드백·해설.
-- **기획력 및 실무 접합성**: 교육 현장 팀 과제·동료 평가·결과 점수 연계, 이탈 경보·과제 피드백·강의 Q&A·토론 요약·루브릭 점검 등 운영 모듈.
-- **창의성**: 기여–결과 괴리 분석, 협업 그래프 시각화, 역할 4유형 자동 분류, 고급 이상 신호 조합, 규칙 기반 설명 카드·팀 역할 밸런스·면담 질문 키트·프론트 가상 시뮬레이터.
+- **기술적 완성도**: FastAPI·Vite, OpenAPI(`/docs`), **Docker**·docker-compose, **CI·pytest**, **`X-Request-ID`**, **`GET /api/capabilities`**(심사 4축 JSON).
+- **AI 활용 능력 및 효율성**: 다중 LLM **asyncio 병렬**(`/api/analyze`), 4모델 병렬(`/api/llm/compare`), 팀 평가 **ThreadPoolExecutor 병렬**, 휴리스틱 폴백.
+- **기획력 및 실무 접합성**: 팀 과제·조교 흐름, 부가 모듈(at-risk·피드백·Q&A·토론·루브릭), 결과 내보내기.
+- **창의성**: 불일치·네트워크·역할·이상 탐지·**창의 인사이트**·가상 시뮬레이터. 저장소 **`docs/CONTEST_RUBRIC.md`** 공모전 대응서.
 
 ## 핵심 API
 `POST /api/team/evaluate` — 기여도·무임승차 의심·타임라인·팀원 피드백·(고급) 네트워크·불일치·역할·이상 알림.
@@ -50,8 +51,68 @@ _APP_DESC = """## 심사기준 정렬
 app = FastAPI(
     title="팀 프로젝트 기여도 자동 평가 시스템",
     description=_APP_DESC,
-    version="4.4.0",
+    version="4.5.0",
 )
+
+
+def _capabilities_payload() -> dict[str, Any]:
+    """공모전·심사위원용: 4개 심사기준과 근거를 기계 판독 가능한 형태로 제공."""
+    return {
+        "product": app.title,
+        "version": app.version,
+        "documentation": {
+            "openapi": "/docs",
+            "redoc": "/redoc",
+            "contest_rubric_doc": "docs/CONTEST_RUBRIC.md (저장소)",
+        },
+        "rubric": {
+            "technical_completeness": {
+                "label_ko": "기술적 완성도",
+                "summary": "FastAPI·Vite 분리, Pydantic, OpenAPI, CI/pytest, 요청 추적, Docker",
+                "evidence": [
+                    "backend/learning_analysis/main.py — 앱·미들웨어",
+                    ".github/workflows/ci.yml — CI",
+                    "backend/tests/ — pytest",
+                    "docker-compose.yml, backend/Dockerfile, frontend/Dockerfile",
+                ],
+            },
+            "ai_efficiency": {
+                "label_ko": "AI 활용 능력 및 효율성",
+                "summary": "다중 LLM 병렬, 팀 평가 병렬 생성, 키 없을 때 휴리스틱",
+                "evidence": [
+                    "learning_analysis/pipeline.py — asyncio.gather",
+                    "learning_analysis/compare_freeform.py — 4모델 병렬",
+                    "edu_tools/team.py — ThreadPoolExecutor",
+                ],
+            },
+            "planning_practical": {
+                "label_ko": "기획력 및 실무 접합성",
+                "summary": "교육 팀 과제 입력·부가 도구·내보내기·면담 키트",
+                "evidence": [
+                    "POST /api/team/evaluate",
+                    "POST /api/at-risk/evaluate, /api/feedback/draft, /api/course/ask, …",
+                ],
+            },
+            "creativity": {
+                "label_ko": "창의성",
+                "summary": "기여–결과 불일치, 협업 네트워크, 역할·이상 탐지, 창의 인사이트, 시뮬레이터",
+                "evidence": [
+                    "edu_tools/team_advanced.py",
+                    "creative_insights (team.py)",
+                    "프론트 가상 시뮬레이터 (main.ts)",
+                ],
+            },
+        },
+        "ai_providers_configured": provider_keys_status(),
+        "endpoints": {
+            "capabilities": "GET /api/capabilities",
+            "health": "GET /api/health",
+            "version": "GET /api/version",
+            "team_evaluate": "POST /api/team/evaluate",
+            "analyze": "POST /api/analyze",
+            "llm_compare": "POST /api/llm/compare",
+        },
+    }
 
 
 @app.middleware("http")
@@ -94,6 +155,12 @@ async def api_version():
         "openapi_docs": "/docs",
         "redoc": "/redoc",
     }
+
+
+@app.get("/api/capabilities")
+async def api_capabilities():
+    """공모전 심사 4개 기준 요약·증빙 경로·엔드포인트 목록(JSON)."""
+    return _capabilities_payload()
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)

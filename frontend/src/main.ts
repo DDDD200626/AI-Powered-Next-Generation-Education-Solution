@@ -5,6 +5,9 @@ const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 const REPO_URL =
   "https://github.com/DDDD200626/AI-Powered-Next-Generation-Education-Solution";
 
+/** 공모전 심사 대응서 (저장소 Markdown) */
+const CONTEST_RUBRIC_DOC = `${REPO_URL}/blob/main/docs/CONTEST_RUBRIC.md`;
+
 /** 심사기준 — 평가 요청 시 AI·문서에 반영되도록 기본 문구 */
 const DEFAULT_TEAM_EVALUATION_CRITERIA = `심사기준(평가 시 참고):
 ■ 기술적 완성도 — 시스템 구조·API·시각화·예외 처리
@@ -1130,6 +1133,36 @@ function hubHtml(): string {
       <div class="pill-row hero-pills">${providerPills()}</div>
       <p class="row-actions" style="margin-top:1rem;">
         <button type="button" class="btn btn-primary" data-view="team">팀 기여도 평가로 돌아가기</button>
+      </p>
+    </section>
+
+    <section class="section-block hud-section home-section contest-panel" aria-labelledby="contest-heading">
+      <h2 class="section-title" id="contest-heading">공모전 심사기준 4축 대응</h2>
+      <p class="muted small contest-lead">
+        심사 항목별로 <strong>기술·AI·기획·창의</strong>를 코드·문서·API로 뒷받침합니다.
+        기계 판독 요약은 <code>GET /api/capabilities</code> (OpenAPI <code>/docs</code>에서 호출 가능).
+      </p>
+      <div class="contest-grid">
+        <article class="contest-card">
+          <h3 class="contest-card-title">기술적 완성도</h3>
+          <p class="contest-card-body">FastAPI·Vite·OpenAPI, CI·pytest, 요청 ID, Docker·compose</p>
+        </article>
+        <article class="contest-card">
+          <h3 class="contest-card-title">AI 활용·효율</h3>
+          <p class="contest-card-body">다중 LLM 병렬·팀 평가 병렬 생성·휴리스틱 폴백</p>
+        </article>
+        <article class="contest-card">
+          <h3 class="contest-card-title">기획·실무</h3>
+          <p class="contest-card-body">팀 과제·조교 흐름, 부가 도구, 내보내기·면담 키트</p>
+        </article>
+        <article class="contest-card">
+          <h3 class="contest-card-title">창의성</h3>
+          <p class="contest-card-body">불일치·네트워크·창의 인사이트·시뮬레이터</p>
+        </article>
+      </div>
+      <p class="row-actions contest-actions">
+        <a class="btn btn-ghost btn-sm" href="${CONTEST_RUBRIC_DOC}" target="_blank" rel="noopener noreferrer">심사 대응서 (GitHub)</a>
+        <a class="btn btn-ghost btn-sm" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">저장소</a>
       </p>
     </section>
 
