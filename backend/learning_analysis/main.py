@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 
 try:
     from dotenv import load_dotenv
@@ -14,6 +15,7 @@ except ImportError:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from starlette.requests import Request
 
 from edu_tools.at_risk import router as at_risk_router
 from edu_tools.course_qa import router as course_qa_router
@@ -34,8 +36,8 @@ def _cors_origins() -> list[str]:
 
 
 _APP_DESC = """## 심사기준 정렬
-- **기술적 완성도**: FastAPI 백엔드·Vite 프론트, 구조화된 응답, 팀 평가·고급 분석(네트워크·불일치·역할·이상 탐지), `/docs` 문서.
-- **AI 활용 능력 및 효율성**: 팀 평가·피드백에 생성형 보강(선택), 다중 LLM 파이프라인(`/api/analyze`), 4모델 병렬(`/api/llm/compare`), 키 없을 때 휴리스틱 폴백.
+- **기술적 완성도**: FastAPI 백엔드·Vite 프론트, 구조화된 응답, 팀 평가·고급 분석(네트워크·불일치·역할·이상 탐지), `/docs` 문서, **요청 추적 ID(`X-Request-ID`)**, **CI·pytest 회귀 테스트**, **`/api/version`**.
+- **AI 활용 능력 및 효율성**: 팀 평가·피드백에 생성형 보강(선택), 다중 LLM 파이프라인(`/api/analyze`) **asyncio 병렬**, 4모델 병렬(`/api/llm/compare`), 키 없을 때 휴리스틱 폴백, 팀 평가 시 OpenAI **ThreadPoolExecutor 병렬** 피드백·해설.
 - **기획력 및 실무 접합성**: 교육 현장 팀 과제·동료 평가·결과 점수 연계, 이탈 경보·과제 피드백·강의 Q&A·토론 요약·루브릭 점검 등 운영 모듈.
 - **창의성**: 기여–결과 괴리 분석, 협업 그래프 시각화, 역할 4유형 자동 분류, 고급 이상 신호 조합, 규칙 기반 설명 카드·팀 역할 밸런스·면담 질문 키트·프론트 가상 시뮬레이터.
 
@@ -48,8 +50,18 @@ _APP_DESC = """## 심사기준 정렬
 app = FastAPI(
     title="팀 프로젝트 기여도 자동 평가 시스템",
     description=_APP_DESC,
-    version="4.3.0",
+    version="4.4.0",
 )
+
+
+@app.middleware("http")
+async def add_request_id(request: Request, call_next):
+    rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+    request.state.request_id = rid
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
+
 
 app.include_router(team_router, prefix="/api/team", tags=["team"])
 app.include_router(at_risk_router, prefix="/api/at-risk", tags=["at-risk"])
@@ -71,7 +83,17 @@ app.add_middleware(GZipMiddleware, minimum_size=800)
 @app.get("/api/health")
 async def health():
     st = provider_keys_status()
-    return {"status": "ok", "providers": st}
+    return {"status": "ok", "providers": st, "version": app.version}
+
+
+@app.get("/api/version")
+async def api_version():
+    return {
+        "name": app.title,
+        "version": app.version,
+        "openapi_docs": "/docs",
+        "redoc": "/redoc",
+    }
 
 
 @app.post("/api/analyze", response_model=AnalyzeResponse)
