@@ -1,4 +1,4 @@
-"""팀 기여도 평가 API."""
+"""학습 과정 vs 시험 불일치 · 다중 LLM 분석 API."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ except ImportError:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from team_eval.evaluator import evaluate
-from team_eval.schemas import TeamEvaluateRequest, TeamEvaluateResponse
+from learning_analysis.pipeline import analyze_async, provider_keys_status
+from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse
 
 
 def _cors_origins() -> list[str]:
@@ -26,9 +26,9 @@ def _cors_origins() -> list[str]:
 
 
 app = FastAPI(
-    title="Team Contribution Evaluator",
-    description="AI·휴리스틱 기반 팀 프로젝트 기여도 자동 평가",
-    version="1.0.0",
+    title="Learning-Exam Consistency Analyzer",
+    description="Gemini, ChatGPT, Claude, Grok 병렬 분석 — 부정행위 의심·학습 상태·미래 예측(보조)",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -42,10 +42,10 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health():
-    has_key = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
-    return {"status": "ok", "openai_configured": has_key}
+    st = provider_keys_status()
+    return {"status": "ok", "providers": st}
 
 
-@app.post("/api/evaluate", response_model=TeamEvaluateResponse)
-async def api_evaluate(body: TeamEvaluateRequest) -> TeamEvaluateResponse:
-    return evaluate(body)
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
+    return await analyze_async(body)
