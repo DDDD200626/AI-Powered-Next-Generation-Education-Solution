@@ -14,6 +14,9 @@ except ImportError:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from edu_tools.at_risk import router as at_risk_router
+from edu_tools.feedback import router as feedback_router
+from edu_tools.team import router as team_router
 from learning_analysis.pipeline import analyze_async, provider_keys_status
 from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse
 
@@ -26,10 +29,14 @@ def _cors_origins() -> list[str]:
 
 
 app = FastAPI(
-    title="Learning-Exam Consistency Analyzer",
-    description="Gemini, ChatGPT, Claude, Grok 병렬 분석 — 부정행위 의심·학습 상태·미래 예측(보조)",
-    version="2.0.0",
+    title="EduSignal Platform",
+    description="학습-시험 불일치 다중 LLM 분석, 팀 기여도, 이탈 조기 경보, 과제 피드백 초안",
+    version="3.0.0",
 )
+
+app.include_router(team_router, prefix="/api/team", tags=["team"])
+app.include_router(at_risk_router, prefix="/api/at-risk", tags=["at-risk"])
+app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
 
 app.add_middleware(
     CORSMiddleware,
