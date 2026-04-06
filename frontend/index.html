@@ -3,17 +3,33 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ClassPulse · 백엔드/프론트 분리</title>
+    <meta name="theme-color" content="#0f1419" />
+    <meta
+      name="description"
+      content="ClassPulse — AI 기반 학습 이해도·무결성 보조·교육 운영 지원 (교강사·수강생·운영자)"
+    />
+    <title>ClassPulse · AI 교육 보조</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">본문으로 건너뛰기</a>
+
     <header class="site-header">
       <div class="wrap header-inner">
-        <div>
-          <p class="eyebrow">AI 활용 차세대 교육 솔루션</p>
-          <h1 class="logo">ClassPulse</h1>
-          <p class="tagline">
-            백엔드(FastAPI JSON API) + 프론트엔드(Vite). 교강사·수강생·운영자 보조 레이어 (LMS 대체 아님)
-          </p>
+        <div class="header-brand">
+          <div class="brand-mark" aria-hidden="true">CP</div>
+          <div>
+            <p class="eyebrow">AI 활용 차세대 교육 솔루션</p>
+            <h1 class="logo">ClassPulse</h1>
+            <p class="tagline">
+              교강사·수강생·운영자를 위한 근거 기반 학습·평가·운영 보조. LMS를 대체하지 않습니다.
+            </p>
+          </div>
         </div>
         <div class="header-meta">
           <span id="pill-status" class="pill pill-warn">API 상태 확인 중…</span>
@@ -21,122 +37,220 @@
       </div>
     </header>
 
-    <nav class="tabs wrap" aria-label="기능 구역">
-      <button type="button" class="tab active" data-tab="dash">통합 대시보드</button>
-      <button type="button" class="tab" data-tab="comp">이해도 점검</button>
-      <button type="button" class="tab" data-tab="integ">무결성 보조</button>
-      <button type="button" class="tab" data-tab="learn">근거 기반 학습</button>
-      <button type="button" class="tab" data-tab="teacher">피드백 초안</button>
-      <button type="button" class="tab" data-tab="ops">운영 지표</button>
-    </nav>
+    <div class="tabs-bar">
+      <nav class="tabs wrap" role="tablist" aria-label="기능 구역">
+        <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="dash" id="tab-btn-dash">
+          통합 대시보드
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="comp" id="tab-btn-comp">
+          이해도 점검
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="integ" id="tab-btn-integ">
+          무결성 보조
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="learn" id="tab-btn-learn">
+          근거 기반 학습
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="teacher" id="tab-btn-teacher">
+          피드백 초안
+        </button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="ops" id="tab-btn-ops">
+          운영 지표
+        </button>
+      </nav>
+    </div>
 
-    <main class="wrap main">
-      <section id="panel-dash" class="panel active" aria-labelledby="tab-dash">
-        <h2 id="tab-dash">교강사 · 통합 대시보드</h2>
-        <p class="lead">
-          학습자별 이해도 점수와 무결성 리스크 구간(low/medium/high)을 한 표로 묶어 개입 우선순위를 봅니다.
-        </p>
-        <p class="hint">
-          필수 열: <code>student_id</code>, <code>comprehension_score</code>, <code>integrity_risk_band</code> — 비우면
-          샘플 데이터를 사용합니다.
-        </p>
-        <label class="lbl">CSV 붙여넣기 (선택)</label>
-        <textarea id="dash-csv" class="txt" rows="5" placeholder="헤더 포함 CSV…"></textarea>
-        <div class="row">
-          <button type="button" class="btn secondary" id="btn-dash-preview">표 미리보기</button>
-          <button type="button" class="btn" id="btn-dash-sum">AI 통합 브리핑</button>
+    <main id="main-content" class="wrap main" tabindex="-1">
+      <section
+        id="panel-dash"
+        class="panel panel-card active"
+        role="tabpanel"
+        aria-labelledby="tab-btn-dash"
+        aria-hidden="false"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title" id="tab-dash">교강사 · 통합 대시보드</h2>
+          <p class="lead">
+            학습자별 이해도 점수와 무결성 리스크 구간(low / medium / high)을 한 표로 묶어 개입 우선순위를 봅니다.
+          </p>
+        </header>
+        <div class="panel-body">
+          <p class="hint">
+            필수 열: <code>student_id</code>, <code>comprehension_score</code>, <code>integrity_risk_band</code> —
+            비우면 샘플 데이터를 사용합니다.
+          </p>
+          <label class="lbl" for="dash-csv">CSV 붙여넣기 (선택)</label>
+          <textarea id="dash-csv" class="txt" rows="5" placeholder="헤더 포함 CSV…"></textarea>
+          <div class="row">
+            <button type="button" class="btn secondary" id="btn-dash-preview">표 미리보기</button>
+            <button type="button" class="btn" id="btn-dash-sum">AI 통합 브리핑</button>
+          </div>
+          <p id="dash-note" class="note"></p>
+          <div id="dash-table-wrap" class="table-wrap"></div>
+          <pre id="dash-stats" class="json-out"></pre>
+          <div id="dash-summary" class="prose out"></div>
         </div>
-        <p id="dash-note" class="note"></p>
-        <div id="dash-table-wrap" class="table-wrap"></div>
-        <pre id="dash-stats" class="json-out"></pre>
-        <div id="dash-summary" class="prose out"></div>
       </section>
 
-      <section id="panel-comp" class="panel" aria-labelledby="tab-comp">
-        <h2 id="tab-comp">수강생 · 이해도 점검</h2>
-        <p class="lead">
-          강의 자료에서 검색한 근거 구절만 바탕으로 이해도 리포트를 생성합니다. 최종 판정은 교사 검토 전제입니다.
-        </p>
-        <label class="lbl">평가 질문</label>
-        <input type="text" id="comp-q" class="inp" placeholder="예: RAG가 교실에서 어떤 역할을 할 수 있나요?" />
-        <label class="lbl">학생 답변</label>
-        <textarea id="comp-a" class="txt" rows="6"></textarea>
-        <label class="lbl">검색 구절 수 (2–8)</label>
-        <input type="number" id="comp-k" class="inp narrow" min="2" max="8" value="4" />
-        <button type="button" class="btn" id="btn-comp">이해도 평가 실행</button>
-        <h3>참조 근거</h3>
-        <div id="comp-hits" class="hits"></div>
-        <h3>AI 이해도 리포트</h3>
-        <div id="comp-report" class="prose out"></div>
-      </section>
-
-      <section id="panel-integ" class="panel" aria-labelledby="tab-integ">
-        <h2 id="tab-integ">무결성 · 제출물 보조 분석</h2>
-        <p class="lead">
-          휴리스틱·자료 유사도·(선택) LLM 설명으로 참고 신호를 제공합니다. 단정·적발 용도로 쓰지 마세요.
-        </p>
-        <label class="lbl">과제·시험 지문 (선택)</label>
-        <textarea id="integ-prompt" class="txt" rows="4"></textarea>
-        <label class="lbl">학생 제출 본문</label>
-        <textarea id="integ-sub" class="txt" rows="8"></textarea>
-        <button type="button" class="btn" id="btn-integ">무결성 신호 분석</button>
-        <h3>휴리스틱</h3>
-        <pre id="integ-heur" class="json-out"></pre>
-        <p id="integ-sim" class="note"></p>
-        <h3>AI 무결성 보조 설명</h3>
-        <div id="integ-narr" class="prose out"></div>
-      </section>
-
-      <section id="panel-learn" class="panel" aria-labelledby="tab-learn">
-        <h2 id="tab-learn">수강생 · 근거 기반 학습 도우미</h2>
-        <p class="lead">코퍼스 범위에서 TF-IDF 검색 후, 서버 키가 있으면 출처 번호가 있는 답변을 생성합니다.</p>
-        <label class="lbl">질문</label>
-        <input type="text" id="learn-q" class="inp" placeholder="예: RAG가 교실에서 어떤 페인을 줄여 주나요?" />
-        <label class="lbl">검색 구절 수</label>
-        <input type="number" id="learn-k" class="inp narrow" min="2" max="8" value="4" />
-        <button type="button" class="btn" id="btn-learn">질문하기</button>
-        <h3>검색 근거</h3>
-        <div id="learn-hits" class="hits"></div>
-        <h3>AI 답변</h3>
-        <div id="learn-ans" class="prose out"></div>
-      </section>
-
-      <section id="panel-teacher" class="panel" aria-labelledby="tab-teacher">
-        <h2 id="tab-teacher">교강사 · 피드백 초안</h2>
-        <p class="lead">루브릭과 제출물로 피드백 초안을 생성합니다. 전달 전 교사 검수가 필요합니다.</p>
-        <label class="lbl">루브릭</label>
-        <textarea id="rub" class="txt" rows="6">문제 정의 25점, AI 설계 25점, 구현 30점, 윤리·한계 20점. 각 항목은 구체적 근거가 있어야 합니다.</textarea>
-        <label class="lbl">학생 제출</label>
-        <textarea id="sub" class="txt" rows="8"></textarea>
-        <button type="button" class="btn" id="btn-fb">피드백 초안 생성</button>
-        <div id="fb-out" class="prose out"></div>
-      </section>
-
-      <section id="panel-ops" class="panel" aria-labelledby="tab-ops">
-        <h2 id="tab-ops">운영자 · 운영 지표</h2>
-        <p class="lead">주차별 제출률·지각·포럼 질문 등 표를 바탕으로 운영 요약을 생성합니다.</p>
-        <p class="hint">
-          필수 열: <code>assignment_submit_rate</code>, <code>late_submissions</code>, <code>forum_questions</code> —
-          비우면 샘플.
-        </p>
-        <label class="lbl">CSV 붙여넣기 (선택)</label>
-        <textarea id="ops-csv" class="txt" rows="5"></textarea>
-        <div class="row">
-          <button type="button" class="btn secondary" id="btn-ops-preview">표 미리보기</button>
-          <button type="button" class="btn" id="btn-ops-sum">운영 요약 생성</button>
+      <section
+        id="panel-comp"
+        class="panel panel-card"
+        role="tabpanel"
+        aria-labelledby="tab-btn-comp"
+        aria-hidden="true"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title" id="tab-comp-h">수강생 · 이해도 점검</h2>
+          <p class="lead">
+            강의 자료에서 검색한 근거 구절만 바탕으로 이해도 리포트를 생성합니다. 최종 판정은 교사 검토 전제입니다.
+          </p>
+        </header>
+        <div class="panel-body">
+          <label class="lbl" for="comp-q">평가 질문</label>
+          <input type="text" id="comp-q" class="inp" placeholder="예: RAG가 교실에서 어떤 역할을 할 수 있나요?" />
+          <label class="lbl" for="comp-a">학생 답변</label>
+          <textarea id="comp-a" class="txt" rows="6"></textarea>
+          <div class="field-inline">
+            <label class="lbl" for="comp-k">검색 구절 수 (2–8)</label>
+            <input type="number" id="comp-k" class="inp narrow" min="2" max="8" value="4" />
+          </div>
+          <button type="button" class="btn" id="btn-comp">이해도 평가 실행</button>
+          <div class="output-block">
+            <h3 class="output-title">참조 근거</h3>
+            <div id="comp-hits" class="hits"></div>
+          </div>
+          <div class="output-block">
+            <h3 class="output-title">AI 이해도 리포트</h3>
+            <div id="comp-report" class="prose out"></div>
+          </div>
         </div>
-        <p id="ops-note" class="note"></p>
-        <div id="ops-table-wrap" class="table-wrap"></div>
-        <pre id="ops-stats" class="json-out"></pre>
-        <div id="ops-summary" class="prose out"></div>
+      </section>
+
+      <section
+        id="panel-integ"
+        class="panel panel-card"
+        role="tabpanel"
+        aria-labelledby="tab-btn-integ"
+        aria-hidden="true"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title">무결성 · 제출물 보조 분석</h2>
+          <p class="lead">
+            휴리스틱·자료 유사도·(선택) LLM 설명으로 참고 신호를 제공합니다. 단정·적발 용도로 쓰지 마세요.
+          </p>
+        </header>
+        <div class="panel-body">
+          <label class="lbl" for="integ-prompt">과제·시험 지문 (선택)</label>
+          <textarea id="integ-prompt" class="txt" rows="4"></textarea>
+          <label class="lbl" for="integ-sub">학생 제출 본문</label>
+          <textarea id="integ-sub" class="txt" rows="8"></textarea>
+          <button type="button" class="btn" id="btn-integ">무결성 신호 분석</button>
+          <div class="output-block">
+            <h3 class="output-title">휴리스틱</h3>
+            <pre id="integ-heur" class="json-out"></pre>
+          </div>
+          <p id="integ-sim" class="note"></p>
+          <div class="output-block">
+            <h3 class="output-title">AI 무결성 보조 설명</h3>
+            <div id="integ-narr" class="prose out"></div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="panel-learn"
+        class="panel panel-card"
+        role="tabpanel"
+        aria-labelledby="tab-btn-learn"
+        aria-hidden="true"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title">수강생 · 근거 기반 학습 도우미</h2>
+          <p class="lead">코퍼스 범위에서 TF-IDF 검색 후, 서버 키가 있으면 출처 번호가 있는 답변을 생성합니다.</p>
+        </header>
+        <div class="panel-body">
+          <label class="lbl" for="learn-q">질문</label>
+          <input type="text" id="learn-q" class="inp" placeholder="예: RAG가 교실에서 어떤 페인을 줄여 주나요?" />
+          <div class="field-inline">
+            <label class="lbl" for="learn-k">검색 구절 수</label>
+            <input type="number" id="learn-k" class="inp narrow" min="2" max="8" value="4" />
+          </div>
+          <button type="button" class="btn" id="btn-learn">질문하기</button>
+          <div class="output-block">
+            <h3 class="output-title">검색 근거</h3>
+            <div id="learn-hits" class="hits"></div>
+          </div>
+          <div class="output-block">
+            <h3 class="output-title">AI 답변</h3>
+            <div id="learn-ans" class="prose out"></div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="panel-teacher"
+        class="panel panel-card"
+        role="tabpanel"
+        aria-labelledby="tab-btn-teacher"
+        aria-hidden="true"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title">교강사 · 피드백 초안</h2>
+          <p class="lead">루브릭과 제출물로 피드백 초안을 생성합니다. 전달 전 교사 검수가 필요합니다.</p>
+        </header>
+        <div class="panel-body">
+          <label class="lbl" for="rub">루브릭</label>
+          <textarea id="rub" class="txt" rows="6">문제 정의 25점, AI 설계 25점, 구현 30점, 윤리·한계 20점. 각 항목은 구체적 근거가 있어야 합니다.</textarea>
+          <label class="lbl" for="sub">학생 제출</label>
+          <textarea id="sub" class="txt" rows="8"></textarea>
+          <button type="button" class="btn" id="btn-fb">피드백 초안 생성</button>
+          <div class="output-block">
+            <h3 class="output-title">피드백 초안</h3>
+            <div id="fb-out" class="prose out"></div>
+          </div>
+        </div>
+      </section>
+
+      <section
+        id="panel-ops"
+        class="panel panel-card"
+        role="tabpanel"
+        aria-labelledby="tab-btn-ops"
+        aria-hidden="true"
+      >
+        <header class="panel-head">
+          <h2 class="panel-title">운영자 · 운영 지표</h2>
+          <p class="lead">주차별 제출률·지각·포럼 질문 등 표를 바탕으로 운영 요약을 생성합니다.</p>
+        </header>
+        <div class="panel-body">
+          <p class="hint">
+            필수 열: <code>assignment_submit_rate</code>, <code>late_submissions</code>, <code>forum_questions</code> —
+            비우면 샘플.
+          </p>
+          <label class="lbl" for="ops-csv">CSV 붙여넣기 (선택)</label>
+          <textarea id="ops-csv" class="txt" rows="5"></textarea>
+          <div class="row">
+            <button type="button" class="btn secondary" id="btn-ops-preview">표 미리보기</button>
+            <button type="button" class="btn" id="btn-ops-sum">운영 요약 생성</button>
+          </div>
+          <p id="ops-note" class="note"></p>
+          <div id="ops-table-wrap" class="table-wrap"></div>
+          <pre id="ops-stats" class="json-out"></pre>
+          <div id="ops-summary" class="prose out"></div>
+        </div>
       </section>
     </main>
 
-    <footer class="site-footer wrap">
-      <p>
-        API 키는 백엔드 환경변수만 사용합니다. 프론트·저장소에 넣지 마세요. 무결성 기능은 참고 신호이며 적발·징계를
-        대체하지 않습니다.
-      </p>
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <p class="footer-line">
+          <span class="footer-badge">보안</span>
+          API 키는 백엔드 환경변수만 사용합니다. 프론트·Git에 비밀키를 넣지 마세요.
+        </p>
+        <p class="footer-line muted">
+          무결성 기능은 교육적 참고 신호이며, 적발·징계 판단을 대체하지 않습니다.
+        </p>
+      </div>
     </footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
