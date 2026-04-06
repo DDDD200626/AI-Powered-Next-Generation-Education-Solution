@@ -103,10 +103,15 @@ function renderHits(container: HTMLElement, hits: Hit[] | undefined) {
 
 function showTab(id: string) {
   document.querySelectorAll(".tab").forEach((t) => {
-    t.classList.toggle("active", (t as HTMLElement).dataset.tab === id);
+    const b = t as HTMLButtonElement;
+    const on = b.dataset.tab === id;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
   });
   document.querySelectorAll(".panel").forEach((p) => {
-    p.classList.toggle("active", p.id === `panel-${id}`);
+    const on = p.id === `panel-${id}`;
+    p.classList.toggle("active", on);
+    p.setAttribute("aria-hidden", on ? "false" : "true");
   });
 }
 
