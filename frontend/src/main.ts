@@ -838,6 +838,9 @@ function hubHtml(): string {
       <p class="hero-text home-lead">
         아래 도구는 <strong>실제 API</strong>와 연결되어 있습니다. 과정–시험은 다중 LLM, 팀·이탈·강의Q·토론·루브릭은 OpenAI가 있으면 품질이 올라가고 없으면 휴리스틱·키워드 요약을 씁니다. 피드백 초안은 OpenAI가 필요합니다.
       </p>
+      <p class="muted small home-lead" style="margin-top:0.5rem;">
+        로컬 개발: 저장소 루트에서 <code>npm run dev</code> → 백엔드 <code>8000</code> + Vite <code>5173</code>이 함께 뜨고, 브라우저의 <code>/api</code> 요청이 FastAPI로 프록시됩니다.
+      </p>
       <div class="pill-row hero-pills">${providerPills()}</div>
     </section>
 

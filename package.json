@@ -1,0 +1,14 @@
+{
+  "name": "edusignal",
+  "private": true,
+  "description": "EduSignal — 백엔드(FastAPI) + 프론트(Vite) 한 번에 실행",
+  "scripts": {
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && python -m uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:frontend": "cd frontend && npm run dev",
+    "install:all": "cd frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
