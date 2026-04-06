@@ -228,6 +228,42 @@ body {
   margin: 0 0 0.5rem;
 }
 
+/* 심사 기준 스트립 (팀 평가 페이지) */
+.rubric-strip {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-hover);
+}
+
+.rubric-strip-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.rubric-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.rubric-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #b8c9e8;
+  background: rgba(91, 143, 255, 0.12);
+  border: 1px solid rgba(91, 143, 255, 0.28);
+  border-radius: 999px;
+}
+
 .lead,
 .analyze-lead {
   font-size: 0.95rem;

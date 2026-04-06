@@ -6,10 +6,10 @@
 
 | 기준 | 본 솔루션에서의 근거 |
 |------|----------------------|
-| **기술적 완성도** | FastAPI·프론트 분리, 타입·스키마 기반 API, 팀 평가 고급 모듈(불일치·네트워크·역할·이상 탐지), OpenAPI(`/docs`), 로컬·배포 실행 경로 정리 |
-| **AI 활용 능력 및 효율성** | 다중 LLM 구조화 분석·4모델 병렬 비교, 팀 평가·피드백의 생성형 보강(키 선택 시), 키 미설정 시 휴리스틱 폴백으로 **비용·환경에 맞춘 단계적 활용** |
+| **기술적 완성도** | FastAPI·Vite 분리, Pydantic 스키마, OpenAPI(`/docs`), **GitHub Actions CI**(import·**pytest**·프론트 빌드), 응답 **`X-Request-ID`**·`GET /api/version`, 팀 평가 고급 모듈(불일치·네트워크·역할·이상 탐지) |
+| **AI 활용 능력 및 효율성** | `/api/analyze` **asyncio 병렬** 다중 LLM, `/api/llm/compare` 4모델 병렬, 팀 평가 시 OpenAI **ThreadPoolExecutor 병렬**(피드백·불일치 해설), 키 없을 때 **휴리스틱 폴백**으로 비용·환경에 맞춘 단계적 활용 |
 | **기획력 및 실무 접합성** | 팀 과제 운영(지표·동료 메모·결과 점수·협업 간선), 교육 부가 도구(이탈 경보·과제 피드백·강의 Q&A·토론·루브릭)로 **수업·조교 업무 흐름**과 연결 |
-| **창의성** | 기여 추정 vs 결과 점수 **불일치 분석**, **협업 네트워크** 시각화, **역할 유형** 자동 분류, 무임승차·네트워크·괴리를 묶은 **고급 이상 탐지** |
+| **창의성** | 기여–결과 **불일치**, **협업 네트워크**, 역할 4유형, **고급 이상 탐지**, **규칙 기반 창의 인사이트**(스토리라인·역할 레이더·면담 질문·설명 카드)·**가상 시뮬레이터** |
 
 **핵심 API:** `POST /api/team/evaluate`  
 동일 저장소에 **부가 모듈**(과정–시험 분석, 4AI 비교, 이탈 경보, 피드백 초안 등)이 포함되어 있으며, 웹에서는 **「부가 도구」** 메뉴에서 열 수 있습니다.
@@ -82,8 +82,18 @@ npm run dev
 - **`collaboration_edges`** (선택): `[{ "source": "이름", "target": "이름", "weight": 0–100 }]` — 팀원 간 상호작용. 없으면 서버가 기여 지수로 **완전 그래프**를 추정합니다.
 - **응답**: `collaboration_network`(노드 좌표·간선), `anomaly_alerts`(예: `FREE_RIDER`, `NETWORK_ISOLATE`, `CONTRIBUTION_OUTCOME_GAP`), 멤버별 `contribution_type_label`·`role_scores`, `advanced_mode`(`heuristic` | `openai_enriched`).
 
+## 테스트 (기술적 완성도)
+
+```bash
+cd backend
+pip install -r requirements.txt
+python -m pytest tests/ -q
+```
+
 ## 성능·실무 팁
 
+- **요청 추적**: 모든 API 응답에 **`X-Request-ID`** 헤더가 붙습니다(클라이언트가 `X-Request-ID`를 보내면 그 값을 유지).
+- **버전**: `GET /api/version` — 앱 이름·버전·문서 경로. `GET /api/health` 응답에도 `version` 필드가 포함됩니다.
 - **응답 메타**: 팀 평가 응답에 `request_id`, `generated_at`, `processing_ms`가 포함되어 기록·재현에 활용할 수 있습니다.
 - **백엔드**: OpenAI 키가 있을 때 팀원 피드백 생성과 고급 해설 보강을 **병렬**로 호출해 지연을 줄입니다. 큰 페이로드는 **GZip**으로 압축됩니다.
 - **프론트**: 평가 입력은 브라우저에 **자동 임시 저장**되며, 결과는 **JSON 내보내기·요약 복사·인쇄**로 보관할 수 있습니다.

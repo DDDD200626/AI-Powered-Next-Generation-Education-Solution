@@ -19,6 +19,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Pytest
+        run: pytest tests/ -q
       - name: Import app
         run: python -c "from learning_analysis.main import app; assert app.title"
 

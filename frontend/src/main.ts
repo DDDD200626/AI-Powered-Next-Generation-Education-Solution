@@ -1621,6 +1621,15 @@ function teamHtml(): string {
   <div class="page page-animate analyze-page">
     <p class="eyebrow">Team Project · Auto Evaluation</p>
     <h1 class="page-title">팀 프로젝트 기여도 자동 평가</h1>
+    <section class="rubric-strip" aria-label="심사 기준 반영 요약">
+      <p class="rubric-strip-title">심사기준 4축 — 본 솔루션 반영</p>
+      <div class="rubric-strip-row">
+        <span class="rubric-chip" title="FastAPI·Vite·OpenAPI·CI·pytest·요청 ID">기술적 완성도</span>
+        <span class="rubric-chip" title="다중 LLM 병렬·생성형 보강·휴리스틱 폴백">AI 활용·효율</span>
+        <span class="rubric-chip" title="팀 운영·조교 흐름·부가 도구">기획·실무</span>
+        <span class="rubric-chip" title="불일치·네트워크·창의 인사이트·시뮬레이터">창의성</span>
+      </div>
+    </section>
     <p class="lead analyze-lead">
       정량 지표(커밋·PR·태스크 등)·주차별 활동·자기·동료 서술을 바탕으로 <strong>기여 지수</strong>를 산출하고,
       <strong>무임승차 의심</strong>·<strong>기여 유형(개발·문서·리더·서포터)</strong>·<strong>기여–결과 불일치</strong>·<strong>협업 네트워크</strong>·<strong>이상 탐지(고급)</strong>·<strong>기여도 타임라인</strong>·<strong>팀원별 AI 피드백</strong>·
