@@ -2,6 +2,26 @@ import "./style.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
+/** 세션 스토리지 — 탭 닫으면 삭제. 서버에 키가 없을 때만 백엔드로 헤더 전송. */
+const OPENAI_SESSION_KEY = "classpulse_openai_key";
+
+function getStoredOpenAIKey(): string {
+  try {
+    return (sessionStorage.getItem(OPENAI_SESSION_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function setStoredOpenAIKey(value: string): void {
+  try {
+    if (value) sessionStorage.setItem(OPENAI_SESSION_KEY, value);
+    else sessionStorage.removeItem(OPENAI_SESSION_KEY);
+  } catch {
+    /* 사생활 보호 모드 등 */
+  }
+}
+
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
@@ -16,9 +36,13 @@ function errDetail(data: unknown): string {
 }
 
 async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const clientKey = getStoredOpenAIKey();
+  if (clientKey) headers["X-ClassPulse-OpenAI-Key"] = clientKey;
+
   const r = await fetch(apiUrl(path), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   const data = (await r.json().catch(() => ({}))) as T & { detail?: unknown };
@@ -115,18 +139,44 @@ function showTab(id: string) {
   });
 }
 
+interface HealthJson {
+  openai_configured?: boolean;
+  client_openai_ui?: boolean;
+}
+
 async function refreshPill() {
   const pill = $("#pill-status");
+  const wrap = document.getElementById("client-key-wrap");
   try {
     const r = await fetch(apiUrl("/api/health"));
-    const j = (await r.json()) as { openai_configured?: boolean };
-    pill.className = j.openai_configured ? "pill pill-ok" : "pill pill-warn";
-    pill.textContent = j.openai_configured
-      ? "OpenAI 서버 키 설정됨"
-      : "OPENAI_API_KEY 미설정 — 일부 AI 기능 비활성";
+    const j = (await r.json()) as HealthJson;
+    const serverKey = Boolean(j.openai_configured);
+    const showClientUi = Boolean(j.client_openai_ui);
+    const hasBrowserKey = Boolean(getStoredOpenAIKey());
+
+    if (wrap) wrap.hidden = !showClientUi;
+
+    if (serverKey) {
+      pill.className = "pill pill-ok";
+      pill.textContent = "OpenAI — 서버 키 사용 중";
+      return;
+    }
+    if (showClientUi && hasBrowserKey) {
+      pill.className = "pill pill-ok";
+      pill.textContent = "OpenAI — 브라우저 키로 AI 활성";
+      return;
+    }
+    if (showClientUi) {
+      pill.className = "pill pill-warn";
+      pill.textContent = "OpenAI 키 입력·저장 시 AI 활성화";
+      return;
+    }
+    pill.className = "pill pill-warn";
+    pill.textContent = "OpenAI 사용 불가 (서버 미설정 또는 클라이언트 키 비허용)";
   } catch {
     pill.className = "pill pill-warn";
     pill.textContent = "백엔드에 연결할 수 없습니다 (포트 8000 확인)";
+    if (wrap) wrap.hidden = true;
   }
 }
 
@@ -162,6 +212,38 @@ function init() {
   });
 
   void refreshPill();
+
+  document.getElementById("btn-client-key-save")?.addEventListener("click", () => {
+    const input = document.getElementById("client-openai-key") as HTMLInputElement | null;
+    const feedback = document.getElementById("client-key-feedback");
+    const v = input?.value.trim() ?? "";
+    if (!v) {
+      if (feedback) {
+        feedback.textContent = "키를 입력한 뒤 저장하세요.";
+        feedback.style.color = "var(--warn)";
+      }
+      return;
+    }
+    setStoredOpenAIKey(v);
+    if (input) input.value = "";
+    if (feedback) {
+      feedback.textContent = "저장했습니다. 이 탭을 닫기 전까지 유지됩니다.";
+      feedback.style.color = "var(--ok)";
+    }
+    void refreshPill();
+  });
+
+  document.getElementById("btn-client-key-clear")?.addEventListener("click", () => {
+    const input = document.getElementById("client-openai-key") as HTMLInputElement | null;
+    const feedback = document.getElementById("client-key-feedback");
+    setStoredOpenAIKey("");
+    if (input) input.value = "";
+    if (feedback) {
+      feedback.textContent = "브라우저에 저장한 키를 지웠습니다.";
+      feedback.style.color = "var(--muted)";
+    }
+    void refreshPill();
+  });
 
   button("#btn-learn").addEventListener("click", async () => {
     const q = (document.getElementById("learn-q") as HTMLInputElement).value.trim();

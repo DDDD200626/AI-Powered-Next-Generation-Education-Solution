@@ -39,6 +39,25 @@
         </div>
         <div class="header-meta">
           <span id="pill-status" class="pill pill-warn">API 상태 확인 중…</span>
+          <div id="client-key-wrap" class="client-key-wrap" hidden>
+            <p class="client-key-hint">
+              서버에 OpenAI 키가 없을 때만 사용합니다. 이 브라우저 <strong>세션</strong>에만 저장됩니다. 공용 PC·시연 시 유출
+              주의.
+            </p>
+            <div class="client-key-row">
+              <input
+                type="password"
+                id="client-openai-key"
+                class="inp client-key-input"
+                placeholder="sk-… 키 입력 후 저장"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button type="button" class="btn secondary btn-compact" id="btn-client-key-save">저장</button>
+              <button type="button" class="btn secondary btn-compact" id="btn-client-key-clear">지우기</button>
+            </div>
+            <p id="client-key-feedback" class="client-key-feedback" aria-live="polite"></p>
+          </div>
         </div>
       </div>
     </header>
