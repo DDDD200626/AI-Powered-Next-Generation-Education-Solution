@@ -9,7 +9,16 @@ function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-type SiteView = "hub" | "analyze" | "team" | "at-risk" | "feedback" | "about";
+type SiteView =
+  | "hub"
+  | "analyze"
+  | "team"
+  | "at-risk"
+  | "feedback"
+  | "syllabus"
+  | "discussion"
+  | "rubric"
+  | "about";
 
 interface ProviderKeys {
   gemini?: boolean;
@@ -96,6 +105,31 @@ interface FeedbackResponse {
   disclaimer?: string;
 }
 
+interface CourseAskResponse {
+  mode: string;
+  answer_draft: string;
+  citations: string[];
+  caveats?: string;
+}
+
+interface DiscussionSynthesizeResponse {
+  mode: string;
+  summary: string;
+  themes: string[];
+  participation_notes: string;
+  suggested_followups: string[];
+  disclaimer?: string;
+}
+
+interface RubricAlignResponse {
+  mode: string;
+  alignment_score: number;
+  matched_rubric_points: string[];
+  gaps: string[];
+  suggestions: string;
+  disclaimer?: string;
+}
+
 function emptyTeamMember(): TeamMemberRow {
   return {
     name: "",
@@ -112,6 +146,10 @@ function emptyTeamMember(): TeamMemberRow {
 
 function emptyWeekRow(): WeekRow {
   return { week_label: "", engagement: "", assessment_score: "" };
+}
+
+function emptyDiscussionPost(): { author: string; text: string } {
+  return { author: "", text: "" };
 }
 
 function escapeHtml(s: string): string {
@@ -168,6 +206,29 @@ const state: {
     loading: boolean;
     error: string | null;
   };
+  syllabus: {
+    course_name: string;
+    syllabus_text: string;
+    question: string;
+    result: CourseAskResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
+  discussion: {
+    thread_title: string;
+    posts: { author: string; text: string }[];
+    result: DiscussionSynthesizeResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
+  rubricAlign: {
+    rubric: string;
+    grader_rationale: string;
+    student_work: string;
+    result: RubricAlignResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
 } = {
   view: "hub",
   course_name: "",
@@ -210,6 +271,29 @@ const state: {
     rubric: "",
     assignment_prompt: "",
     submission: "",
+    result: null,
+    loading: false,
+    error: null,
+  },
+  syllabus: {
+    course_name: "",
+    syllabus_text: "",
+    question: "",
+    result: null,
+    loading: false,
+    error: null,
+  },
+  discussion: {
+    thread_title: "",
+    posts: [emptyDiscussionPost(), emptyDiscussionPost()],
+    result: null,
+    loading: false,
+    error: null,
+  },
+  rubricAlign: {
+    rubric: "",
+    grader_rationale: "",
+    student_work: "",
     result: null,
     loading: false,
     error: null,
@@ -496,6 +580,169 @@ async function submitFeedback(): Promise<void> {
   render();
 }
 
+function readSyllabusForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.syllabus.course_name = g("sy_course")?.value ?? "";
+  state.syllabus.syllabus_text = g("sy_text")?.value ?? "";
+  state.syllabus.question = g("sy_q")?.value ?? "";
+}
+
+async function submitSyllabus(): Promise<void> {
+  readSyllabusForm();
+  state.syllabus.error = null;
+  state.syllabus.result = null;
+  state.syllabus.loading = true;
+  render();
+
+  const text = state.syllabus.syllabus_text.trim();
+  const q = state.syllabus.question.trim();
+  if (text.length < 20 || q.length < 2) {
+    state.syllabus.error = "안내 문구는 20자 이상, 질문은 2자 이상 입력하세요.";
+    state.syllabus.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    course_name: state.syllabus.course_name.trim(),
+    syllabus_text: text,
+    question: q,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/course/ask"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as CourseAskResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.syllabus.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.syllabus.loading = false;
+      render();
+      return;
+    }
+    state.syllabus.result = data;
+  } catch (e) {
+    state.syllabus.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.syllabus.loading = false;
+  }
+  render();
+}
+
+function readDiscussionForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.discussion.thread_title = g("disc_title")?.value ?? "";
+  state.discussion.posts = state.discussion.posts.map((_, i) => ({
+    author: g(`disc_author_${i}`)?.value ?? "",
+    text: g(`disc_text_${i}`)?.value ?? "",
+  }));
+}
+
+async function submitDiscussion(): Promise<void> {
+  readDiscussionForm();
+  state.discussion.error = null;
+  state.discussion.result = null;
+  state.discussion.loading = true;
+  render();
+
+  const posts = state.discussion.posts
+    .filter((p) => p.text.trim())
+    .map((p) => ({
+      author_label: p.author.trim() || "익명",
+      text: p.text.trim(),
+    }));
+
+  if (posts.length === 0) {
+    state.discussion.error = "최소 한 게시글 본문을 입력하세요.";
+    state.discussion.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    thread_title: state.discussion.thread_title.trim(),
+    posts,
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/discussion/synthesize"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as DiscussionSynthesizeResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.discussion.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.discussion.loading = false;
+      render();
+      return;
+    }
+    state.discussion.result = data;
+  } catch (e) {
+    state.discussion.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.discussion.loading = false;
+  }
+  render();
+}
+
+function readRubricAlignForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLTextAreaElement | null;
+  state.rubricAlign.rubric = g("ra_rubric")?.value ?? "";
+  state.rubricAlign.grader_rationale = g("ra_rationale")?.value ?? "";
+  state.rubricAlign.student_work = g("ra_student")?.value ?? "";
+}
+
+async function submitRubricAlign(): Promise<void> {
+  readRubricAlignForm();
+  state.rubricAlign.error = null;
+  state.rubricAlign.result = null;
+  state.rubricAlign.loading = true;
+  render();
+
+  if (!state.rubricAlign.rubric.trim() || !state.rubricAlign.grader_rationale.trim()) {
+    state.rubricAlign.error = "루브릭과 채점 근거를 입력하세요.";
+    state.rubricAlign.loading = false;
+    render();
+    return;
+  }
+
+  const body = {
+    rubric: state.rubricAlign.rubric.trim(),
+    grader_rationale: state.rubricAlign.grader_rationale.trim(),
+    student_work_excerpt: state.rubricAlign.student_work.trim(),
+  };
+
+  try {
+    const r = await fetch(apiUrl("/api/rubric/check"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as RubricAlignResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.rubricAlign.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.rubricAlign.loading = false;
+      render();
+      return;
+    }
+    state.rubricAlign.result = data;
+  } catch (e) {
+    state.rubricAlign.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.rubricAlign.loading = false;
+  }
+  render();
+}
+
 function providerPills(): string {
   const p = state.health?.providers;
   if (!p) return '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
@@ -519,6 +766,9 @@ function navHtml(): string {
         <button type="button" class="${cur("team")}" data-view="team">팀</button>
         <button type="button" class="${cur("at-risk")}" data-view="at-risk">이탈</button>
         <button type="button" class="${cur("feedback")}" data-view="feedback">피드백</button>
+        <button type="button" class="${cur("syllabus")}" data-view="syllabus">강의Q</button>
+        <button type="button" class="${cur("discussion")}" data-view="discussion">토론</button>
+        <button type="button" class="${cur("rubric")}" data-view="rubric">루브릭</button>
         <button type="button" class="${cur("about")}" data-view="about">안내</button>
         <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
@@ -546,7 +796,7 @@ function hubHtml(): string {
       <p class="eyebrow">Education × AI</p>
       <h1 class="home-headline">도구 허브</h1>
       <p class="hero-text home-lead">
-        아래 네 가지는 <strong>실제 API</strong>와 연결되어 있습니다. 과정–시험 분석은 다중 LLM, 팀·이탈은 OpenAI 또는 휴리스틱, 피드백 초안은 OpenAI가 필요합니다.
+        아래 도구는 <strong>실제 API</strong>와 연결되어 있습니다. 과정–시험은 다중 LLM, 팀·이탈·강의Q·토론·루브릭은 OpenAI가 있으면 품질이 올라가고 없으면 휴리스틱·키워드 요약을 씁니다. 피드백 초안은 OpenAI가 필요합니다.
       </p>
       <div class="pill-row hero-pills">${providerPills()}</div>
     </section>
@@ -578,6 +828,24 @@ function hubHtml(): string {
           <p>루브릭·제출물로 피드백 문단·강점·개선점 초안을 생성합니다. 교사 검수 후 전달하세요.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="feedback">열기</button>
         </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">반복 질문</span>
+          <h3>강의 안내 Q&amp;A 초안</h3>
+          <p>실라버스·공지 일부와 학생 질문을 넣으면 안내 근거에 기반한 답변 초안·인용을 봅니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="syllabus">열기</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">대규모 토론</span>
+          <h3>토론 스레드 요약</h3>
+          <p>게시글을 붙여 넣으면 주제·참여 양상·후속 질문 초안을 정리합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="discussion">열기</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">공정성</span>
+          <h3>루브릭·채점 근거 일치</h3>
+          <p>루브릭과 채점 코멘트를 비교해 정합성 점수와 개선 힌트를 봅니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="rubric">열기</button>
+        </article>
       </div>
     </section>
   </div>`;
@@ -589,7 +857,7 @@ function aboutHtml(): string {
     <h1 class="page-title">이용 안내</h1>
     <div class="prose-block">
       <p><strong>목적.</strong> 교수·조교·기관의 <strong>의사결정 보조</strong>입니다. 부정행위 여부는 인간의 심사·증거·절차에 따릅니다.</p>
-      <p><strong>API 키.</strong> <code>backend/.env</code>에 Google(Gemini), OpenAI, Anthropic, xAI(Grok) 키를 넣으면 해당 모델이 응답합니다. 키가 없으면 과정–시험·팀·이탈은 휴리스틱을 씁니다. <strong>피드백 초안</strong>은 OpenAI 키가 필요합니다.</p>
+      <p><strong>API 키.</strong> <code>backend/.env</code>에 키를 넣으면 해당 모델이 응답합니다. 과정–시험은 다중 LLM, 팀·이탈·강의Q·토론·루브릭은 OpenAI 권장(없으면 단순 휴리스틱). <strong>과제 피드백 초안</strong>은 OpenAI 필수입니다.</p>
       <p><strong>개인정보.</strong> 실명 대신 익명 라벨만 쓰는 것을 권장합니다.</p>
       <p><strong>소스 코드.</strong> <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub 저장소</a></p>
     </div>
@@ -769,6 +1037,134 @@ function feedbackHtml(): string {
   </div>`;
 }
 
+function syllabusHtml(): string {
+  const r = state.syllabus.result;
+  const resultBlock = r
+    ? `
+  <section class="panel panel-result hud-panel">
+    <h2>답변 초안 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <p class="prose">${escapeHtml(r.answer_draft)}</p>
+    ${
+      r.citations?.length
+        ? `<h4>인용·근거 문장</h4><ul>${r.citations.map((c) => `<li class="prose">${escapeHtml(c)}</li>`).join("")}</ul>`
+        : ""
+    }
+    <p class="footer-note muted small">${escapeHtml(r.caveats || "")}</p>
+  </section>`
+    : "";
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">강의 운영</p>
+    <h1 class="page-title">강의 안내 Q&amp;A 초안</h1>
+    <p class="lead analyze-lead">실라버스·공지 텍스트 일부와 학생 질문을 넣으세요. OpenAI가 있으면 근거 중심 답변이, 없으면 키워드 매칭 발췌가 나옵니다.</p>
+    <section class="panel hud-panel">
+      <label class="lbl">과목명 (선택)</label>
+      <input class="txt" id="sy_course" value="${escapeHtml(state.syllabus.course_name)}" />
+      <label class="lbl">강의 안내·실라버스 발췌</label>
+      <textarea class="txt" id="sy_text" rows="10" placeholder="최소 20자">${escapeHtml(state.syllabus.syllabus_text)}</textarea>
+      <label class="lbl">학생 질문</label>
+      <textarea class="txt" id="sy_q" rows="3">${escapeHtml(state.syllabus.question)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-sy-run" ${state.syllabus.loading ? "disabled" : ""}>
+          ${state.syllabus.loading ? "생성 중…" : "초안 만들기"}
+        </button>
+      </div>
+      ${state.syllabus.error ? `<p class="err">${escapeHtml(state.syllabus.error)}</p>` : ""}
+    </section>
+    ${resultBlock}
+  </div>`;
+}
+
+function discussionPostBlock(i: number, p: { author: string; text: string }): string {
+  return `
+  <div class="member-block hud-panel">
+    <h4 class="subh">게시 ${i + 1}</h4>
+    <div class="grid-2">
+      <div><label class="lbl">작성자 라벨 (선택)</label><input class="txt" id="disc_author_${i}" placeholder="익명-A" value="${escapeHtml(p.author)}" /></div>
+    </div>
+    <label class="lbl">본문</label>
+    <textarea class="txt" id="disc_text_${i}" rows="4">${escapeHtml(p.text)}</textarea>
+  </div>`;
+}
+
+function discussionHtml(): string {
+  const blocks = state.discussion.posts.map((p, i) => discussionPostBlock(i, p)).join("");
+  const r = state.discussion.result;
+  const resultBlock = r
+    ? `
+  <section class="panel panel-result hud-panel">
+    <h2>요약 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <p class="prose">${escapeHtml(r.summary)}</p>
+    <h4>주제·쟁점</h4>
+    <ul>${r.themes.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>
+    <h4>참여 메모</h4>
+    <p class="prose">${escapeHtml(r.participation_notes)}</p>
+    <h4>후속 질문 제안</h4>
+    <ul>${r.suggested_followups.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
+  </section>`
+    : "";
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">토론·포럼</p>
+    <h1 class="page-title">스레드 요약</h1>
+    <p class="lead analyze-lead">게시글을 여러 개 붙여 넣을 수 있습니다. OpenAI가 있으면 의미 요약이, 없으면 글자 수·키워드 통계가 나옵니다.</p>
+    <section class="panel hud-panel">
+      <label class="lbl">스레드 제목 (선택)</label>
+      <input class="txt" id="disc_title" value="${escapeHtml(state.discussion.thread_title)}" />
+      ${blocks}
+      <div class="row-actions">
+        <button type="button" class="btn btn-ghost" id="btn-disc-add">게시 추가</button>
+        <button type="button" class="btn btn-ghost" id="btn-disc-remove" ${state.discussion.posts.length <= 1 ? "disabled" : ""}>마지막 게시 제거</button>
+        <button type="button" class="btn btn-primary" id="btn-disc-run" ${state.discussion.loading ? "disabled" : ""}>
+          ${state.discussion.loading ? "요약 중…" : "요약 실행"}
+        </button>
+      </div>
+      ${state.discussion.error ? `<p class="err">${escapeHtml(state.discussion.error)}</p>` : ""}
+    </section>
+    ${resultBlock}
+  </div>`;
+}
+
+function rubricAlignHtml(): string {
+  const r = state.rubricAlign.result;
+  const resultBlock = r
+    ? `
+  <section class="panel panel-result hud-panel">
+    <h2>정합성 <span class="score-num">${r.alignment_score.toFixed(1)}</span> / 100
+      <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <h4>잘 맞는 루브릭 요소</h4>
+    <ul>${r.matched_rubric_points.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+    <h4>격차·주의</h4>
+    <ul>${r.gaps.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+    <h4>제안</h4>
+    <p class="prose">${escapeHtml(r.suggestions)}</p>
+    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
+  </section>`
+    : "";
+  return `
+  <div class="page page-animate analyze-page">
+    <p class="eyebrow">채점 품질</p>
+    <h1 class="page-title">루브릭·채점 근거 일치 점검</h1>
+    <p class="lead analyze-lead">동일 과제의 루브릭과 채점자 코멘트를 넣으세요. OpenAI가 있으면 의미 분석, 없으면 단어 겹침만 봅니다.</p>
+    <section class="panel hud-panel">
+      <label class="lbl">루브릭 전문</label>
+      <textarea class="txt" id="ra_rubric" rows="6">${escapeHtml(state.rubricAlign.rubric)}</textarea>
+      <label class="lbl">채점 근거·코멘트</label>
+      <textarea class="txt" id="ra_rationale" rows="5">${escapeHtml(state.rubricAlign.grader_rationale)}</textarea>
+      <label class="lbl">학생 답안 발췌 (선택)</label>
+      <textarea class="txt" id="ra_student" rows="4">${escapeHtml(state.rubricAlign.student_work)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-ra-run" ${state.rubricAlign.loading ? "disabled" : ""}>
+          ${state.rubricAlign.loading ? "점검 중…" : "정합성 점검"}
+        </button>
+      </div>
+      ${state.rubricAlign.error ? `<p class="err">${escapeHtml(state.rubricAlign.error)}</p>` : ""}
+    </section>
+    ${resultBlock}
+  </div>`;
+}
+
 function resultSectionHtml(): string {
   if (!state.result) return "";
   const res = state.result;
@@ -907,6 +1303,12 @@ function mainContentHtml(): string {
       return atRiskHtml();
     case "feedback":
       return feedbackHtml();
+    case "syllabus":
+      return syllabusHtml();
+    case "discussion":
+      return discussionHtml();
+    case "rubric":
+      return rubricAlignHtml();
     default:
       return analyzeHtml();
   }
@@ -956,6 +1358,15 @@ function setView(v: SiteView): void {
   }
   if (state.view === "feedback") {
     readFeedbackForm();
+  }
+  if (state.view === "syllabus") {
+    readSyllabusForm();
+  }
+  if (state.view === "discussion") {
+    readDiscussionForm();
+  }
+  if (state.view === "rubric") {
+    readRubricAlignForm();
   }
   state.view = v;
   void refreshHealth().then(() => {
@@ -1020,6 +1431,32 @@ function wire(): void {
 
   document.getElementById("btn-fb-run")?.addEventListener("click", () => {
     void submitFeedback();
+  });
+
+  document.getElementById("btn-sy-run")?.addEventListener("click", () => {
+    void submitSyllabus();
+  });
+
+  document.getElementById("btn-disc-add")?.addEventListener("click", () => {
+    readDiscussionForm();
+    state.discussion.posts.push(emptyDiscussionPost());
+    state.view = "discussion";
+    render();
+  });
+
+  document.getElementById("btn-disc-remove")?.addEventListener("click", () => {
+    readDiscussionForm();
+    if (state.discussion.posts.length > 1) state.discussion.posts.pop();
+    state.view = "discussion";
+    render();
+  });
+
+  document.getElementById("btn-disc-run")?.addEventListener("click", () => {
+    void submitDiscussion();
+  });
+
+  document.getElementById("btn-ra-run")?.addEventListener("click", () => {
+    void submitRubricAlign();
   });
 }
 

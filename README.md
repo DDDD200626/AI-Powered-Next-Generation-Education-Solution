@@ -1,17 +1,20 @@
 # EduSignal — 교육 현장 페인 포인트 × AI
 
-교육 현장의 반복 과제(과정–시험 불일치, 팀 기여도, 이탈 조기 파악, 대규모 피드백)를 **보조**하기 위한 API와 웹 UI입니다. 출력은 **참고용**이며 징계·최종 성적을 대체하지 않습니다.
+교육 현장의 반복 과제(과정–시험, 팀, 이탈, 피드백, 반복 질문, 대규모 토론, 채점 공정성)를 **보조**하기 위한 API와 웹 UI입니다. 출력은 **참고용**이며 징계·최종 성적을 대체하지 않습니다.
 
 ## 구현된 기능
 
 | 영역 | 설명 |
 |------|------|
-| **과정 vs 시험** | Gemini, ChatGPT, Claude, Grok 병렬 분석 (`POST /api/analyze`). 키가 없으면 휴리스틱. |
-| **팀 기여도** | 정량·서술 입력 → 기여 지수·차원 점수 초안 (`POST /api/team/evaluate`). OpenAI 있으면 서술 반영, 없으면 휴리스틱. |
-| **이탈·위험** | 주차별 참여 점수 → 위험 지수·신호·개입 제안 (`POST /api/at-risk/evaluate`). |
-| **과제 피드백 초안** | 루브릭·제출물 → 피드백 문단 (`POST /api/feedback/draft`). **OpenAI 키 필수**. |
+| **과정 vs 시험** | Gemini, ChatGPT, Claude, Grok 병렬 (`POST /api/analyze`). 키가 없으면 휴리스틱. |
+| **팀 기여도** | 정량·서술 → 기여 지수 초안 (`POST /api/team/evaluate`). |
+| **이탈·위험** | 주차별 참여 → 위험 지수 (`POST /api/at-risk/evaluate`). |
+| **과제 피드백 초안** | 루브릭·제출물 (`POST /api/feedback/draft`). **OpenAI 필수**. |
+| **강의 안내 Q&A** | 실라버스 발췌 + 질문 → 답 초안·인용 (`POST /api/course/ask`). |
+| **토론 요약** | 게시글 목록 → 주제·후속 질문 (`POST /api/discussion/synthesize`). |
+| **루브릭 정합** | 루브릭 + 채점 근거 → 정합 점수·격차 (`POST /api/rubric/check`). |
 
-프론트엔드: **허브**에서 위 기능으로 이동 · **안내**에 운영 주의사항.
+프론트엔드: **허브**와 상단 메뉴에서 각 도구로 이동 · **안내**에 운영 주의사항.
 
 ## 백엔드
 
@@ -28,6 +31,9 @@ uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000
 - `POST /api/team/evaluate` — 팀 기여도  
 - `POST /api/at-risk/evaluate` — 이탈 조기 경보  
 - `POST /api/feedback/draft` — 피드백 초안 (OpenAI 필요)  
+- `POST /api/course/ask` — 강의 안내 기반 Q&A 초안  
+- `POST /api/discussion/synthesize` — 토론 스레드 요약  
+- `POST /api/rubric/check` — 루브릭·채점 근거 정합 점검  
 - 문서: `http://127.0.0.1:8000/docs`
 
 ### 환경 변수 요약
@@ -35,7 +41,7 @@ uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000
 | 키 | 용도 |
 |----|------|
 | `GOOGLE_API_KEY` 또는 `GEMINI_API_KEY` | Gemini (`GEMINI_MODEL`, 기본 `gemini-2.0-flash`) |
-| `OPENAI_API_KEY` | ChatGPT — 팀·이탈·피드백 보조, 과정–시험 파이프라인 |
+| `OPENAI_API_KEY` | ChatGPT — 팀·이탈·피드백·강의Q·토론·루브릭 보조, 과정–시험 파이프라인 |
 | `ANTHROPIC_API_KEY` | Claude (`ANTHROPIC_MODEL`) |
 | `XAI_API_KEY` 또는 `GROK_API_KEY` | Grok (`GROK_MODEL`, `XAI_BASE_URL`) |
 
