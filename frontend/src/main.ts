@@ -32,6 +32,26 @@ function $(sel: string): HTMLElement {
   return el as HTMLElement;
 }
 
+function button(sel: string): HTMLButtonElement {
+  const el = document.querySelector(sel);
+  if (!(el instanceof HTMLButtonElement)) throw new Error(`Not a button: ${sel}`);
+  return el;
+}
+
+/** 중복 클릭 방지 + 로딩 표시 */
+async function withBusy(btnEl: HTMLButtonElement, task: () => Promise<void>): Promise<void> {
+  if (btnEl.disabled) return;
+  const label = btnEl.textContent;
+  btnEl.disabled = true;
+  btnEl.textContent = "처리 중…";
+  try {
+    await task();
+  } finally {
+    btnEl.disabled = false;
+    btnEl.textContent = label;
+  }
+}
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -132,13 +152,13 @@ async function opsPreview() {
 }
 
 function init() {
-  document.querySelectorAll(".tab").forEach((btn) => {
-    btn.addEventListener("click", () => showTab((btn as HTMLElement).dataset.tab ?? "dash"));
+  document.querySelectorAll(".tab").forEach((b) => {
+    b.addEventListener("click", () => showTab((b as HTMLElement).dataset.tab ?? "dash"));
   });
 
   void refreshPill();
 
-  $("#btn-learn").addEventListener("click", async () => {
+  button("#btn-learn").addEventListener("click", async () => {
     const q = (document.getElementById("learn-q") as HTMLInputElement).value.trim();
     const k = Math.min(8, Math.max(2, parseInt((document.getElementById("learn-k") as HTMLInputElement).value, 10) || 4));
     $("#learn-hits").innerHTML = "";
@@ -147,19 +167,21 @@ function init() {
       alert("질문을 입력하세요.");
       return;
     }
-    try {
-      const data = await postJSON<{ hits: Hit[]; answer?: string | null; answer_error?: string | null }>(
-        "/api/learn",
-        { query: q, top_k: k }
-      );
-      renderHits($("#learn-hits") as HTMLElement, data.hits);
-      ($("#learn-ans") as HTMLElement).textContent = data.answer_error ?? data.answer ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-learn"), async () => {
+      try {
+        const data = await postJSON<{ hits: Hit[]; answer?: string | null; answer_error?: string | null }>(
+          "/api/learn",
+          { query: q, top_k: k }
+        );
+        renderHits($("#learn-hits") as HTMLElement, data.hits);
+        ($("#learn-ans") as HTMLElement).textContent = data.answer_error ?? data.answer ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-comp").addEventListener("click", async () => {
+  button("#btn-comp").addEventListener("click", async () => {
     const question = (document.getElementById("comp-q") as HTMLInputElement).value.trim();
     const answer = (document.getElementById("comp-a") as HTMLTextAreaElement).value.trim();
     const top_k = Math.min(8, Math.max(2, parseInt((document.getElementById("comp-k") as HTMLInputElement).value, 10) || 4));
@@ -169,19 +191,21 @@ function init() {
       alert("질문과 답변을 입력하세요.");
       return;
     }
-    try {
-      const data = await postJSON<{ hits: Hit[]; report?: string | null; report_error?: string | null }>(
-        "/api/comprehension",
-        { question, answer, top_k }
-      );
-      renderHits($("#comp-hits") as HTMLElement, data.hits);
-      ($("#comp-report") as HTMLElement).textContent = data.report_error ?? data.report ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-comp"), async () => {
+      try {
+        const data = await postJSON<{ hits: Hit[]; report?: string | null; report_error?: string | null }>(
+          "/api/comprehension",
+          { question, answer, top_k }
+        );
+        renderHits($("#comp-hits") as HTMLElement, data.hits);
+        ($("#comp-report") as HTMLElement).textContent = data.report_error ?? data.report ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-integ").addEventListener("click", async () => {
+  button("#btn-integ").addEventListener("click", async () => {
     const submission = (document.getElementById("integ-sub") as HTMLTextAreaElement).value.trim();
     const assignment_prompt = (document.getElementById("integ-prompt") as HTMLTextAreaElement).value;
     $("#integ-heur").textContent = "";
@@ -191,26 +215,28 @@ function init() {
       alert("제출 본문을 입력하세요.");
       return;
     }
-    try {
-      const data = await postJSON<{
-        heuristic: unknown;
-        max_similarity: number;
-        max_similarity_source: string | null;
-        narrative?: string | null;
-        narrative_error?: string | null;
-      }>("/api/integrity", { assignment_prompt, submission });
-      $("#integ-heur").textContent = JSON.stringify(data.heuristic, null, 2);
-      $("#integ-sim").textContent =
-        "자료 대비 최대 유사도(참고): " +
-        data.max_similarity +
-        (data.max_similarity_source ? " · 출처: " + data.max_similarity_source : "");
-      ($("#integ-narr") as HTMLElement).textContent = data.narrative_error ?? data.narrative ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-integ"), async () => {
+      try {
+        const data = await postJSON<{
+          heuristic: unknown;
+          max_similarity: number;
+          max_similarity_source: string | null;
+          narrative?: string | null;
+          narrative_error?: string | null;
+        }>("/api/integrity", { assignment_prompt, submission });
+        $("#integ-heur").textContent = JSON.stringify(data.heuristic, null, 2);
+        $("#integ-sim").textContent =
+          "자료 대비 최대 유사도(참고): " +
+          data.max_similarity +
+          (data.max_similarity_source ? " · 출처: " + data.max_similarity_source : "");
+        ($("#integ-narr") as HTMLElement).textContent = data.narrative_error ?? data.narrative ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-fb").addEventListener("click", async () => {
+  button("#btn-fb").addEventListener("click", async () => {
     const rubric = (document.getElementById("rub") as HTMLTextAreaElement).value;
     const submission = (document.getElementById("sub") as HTMLTextAreaElement).value.trim();
     ($("#fb-out") as HTMLElement).textContent = "";
@@ -218,52 +244,62 @@ function init() {
       alert("학생 제출을 입력하세요.");
       return;
     }
-    try {
-      const data = await postJSON<{ draft: string }>("/api/teacher-feedback", { rubric, submission });
-      ($("#fb-out") as HTMLElement).textContent = data.draft ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-fb"), async () => {
+      try {
+        const data = await postJSON<{ draft: string }>("/api/teacher-feedback", { rubric, submission });
+        ($("#fb-out") as HTMLElement).textContent = data.draft ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-dash-preview").addEventListener("click", async () => {
-    try {
-      await dashPreview();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+  button("#btn-dash-preview").addEventListener("click", async () => {
+    await withBusy(button("#btn-dash-preview"), async () => {
+      try {
+        await dashPreview();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-dash-sum").addEventListener("click", async () => {
+  button("#btn-dash-sum").addEventListener("click", async () => {
     ($("#dash-summary") as HTMLElement).textContent = "";
-    try {
-      await dashPreview();
-      const csv_text = (document.getElementById("dash-csv") as HTMLTextAreaElement).value;
-      const data = await postJSON<{ summary: string }>("/api/dashboard/summarize", { csv_text });
-      ($("#dash-summary") as HTMLElement).textContent = data.summary ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-dash-sum"), async () => {
+      try {
+        await dashPreview();
+        const csv_text = (document.getElementById("dash-csv") as HTMLTextAreaElement).value;
+        const data = await postJSON<{ summary: string }>("/api/dashboard/summarize", { csv_text });
+        ($("#dash-summary") as HTMLElement).textContent = data.summary ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-ops-preview").addEventListener("click", async () => {
-    try {
-      await opsPreview();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+  button("#btn-ops-preview").addEventListener("click", async () => {
+    await withBusy(button("#btn-ops-preview"), async () => {
+      try {
+        await opsPreview();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
-  $("#btn-ops-sum").addEventListener("click", async () => {
+  button("#btn-ops-sum").addEventListener("click", async () => {
     ($("#ops-summary") as HTMLElement).textContent = "";
-    try {
-      await opsPreview();
-      const csv_text = (document.getElementById("ops-csv") as HTMLTextAreaElement).value;
-      const data = await postJSON<{ summary: string }>("/api/ops/summarize", { csv_text });
-      ($("#ops-summary") as HTMLElement).textContent = data.summary ?? "";
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
+    await withBusy(button("#btn-ops-sum"), async () => {
+      try {
+        await opsPreview();
+        const csv_text = (document.getElementById("ops-csv") as HTMLTextAreaElement).value;
+        const data = await postJSON<{ summary: string }>("/api/ops/summarize", { csv_text });
+        ($("#ops-summary") as HTMLElement).textContent = data.summary ?? "";
+      } catch (e) {
+        alert(e instanceof Error ? e.message : String(e));
+      }
+    });
   });
 
   showTab("dash");

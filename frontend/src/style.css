@@ -221,8 +221,14 @@ h3 {
   font-weight: 600;
 }
 
-.btn:hover {
+.btn:hover:not(:disabled) {
   filter: brightness(1.08);
+}
+
+.btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  filter: none;
 }
 
 .btn.secondary {
