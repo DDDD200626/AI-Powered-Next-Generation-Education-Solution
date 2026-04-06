@@ -15,7 +15,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from edu_tools.at_risk import router as at_risk_router
+from edu_tools.course_qa import router as course_qa_router
+from edu_tools.discussion import router as discussion_router
 from edu_tools.feedback import router as feedback_router
+from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
 from learning_analysis.pipeline import analyze_async, provider_keys_status
 from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse
@@ -30,13 +33,16 @@ def _cors_origins() -> list[str]:
 
 app = FastAPI(
     title="EduSignal Platform",
-    description="학습-시험 불일치 다중 LLM 분석, 팀 기여도, 이탈 조기 경보, 과제 피드백 초안",
-    version="3.0.0",
+    description="학습-시험 분석, 팀·이탈·피드백, 강의 QnA, 토론 요약, 루브릭 정합 점검",
+    version="3.1.0",
 )
 
 app.include_router(team_router, prefix="/api/team", tags=["team"])
 app.include_router(at_risk_router, prefix="/api/at-risk", tags=["at-risk"])
 app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
+app.include_router(course_qa_router, prefix="/api/course", tags=["course"])
+app.include_router(discussion_router, prefix="/api/discussion", tags=["discussion"])
+app.include_router(rubric_align_router, prefix="/api/rubric", tags=["rubric"])
 
 app.add_middleware(
     CORSMiddleware,
