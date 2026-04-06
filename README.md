@@ -16,7 +16,24 @@
 
 프론트엔드: **허브**와 상단 메뉴에서 각 도구로 이동 · **안내**에 운영 주의사항.
 
-## 백엔드
+## 한 번에 실행 (백엔드 + 프론트 연결)
+
+저장소 **루트**에서 (Python 의존성은 먼저 한 번 설치):
+
+```bash
+cd backend
+pip install -r requirements.txt
+copy .env.example .env
+cd ..
+npm install
+npm run dev
+```
+
+- **API**: `http://127.0.0.1:8000` — FastAPI (`/docs` 로 스키마 확인)  
+- **웹 UI**: `http://127.0.0.1:5173` — Vite가 **`/api` 요청을 백엔드로 프록시**합니다.  
+- 프론트는 `fetch("/api/...")` 만 사용하면 되며, 별도 `VITE_API_BASE` 없이 개발하면 됩니다.
+
+## 백엔드만 실행할 때
 
 ```bash
 cd backend
@@ -45,7 +62,9 @@ uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000
 | `ANTHROPIC_API_KEY` | Claude (`ANTHROPIC_MODEL`) |
 | `XAI_API_KEY` 또는 `GROK_API_KEY` | Grok (`GROK_MODEL`, `XAI_BASE_URL`) |
 
-## 프론트엔드
+## 프론트엔드만 실행할 때
+
+백엔드를 **먼저** `127.0.0.1:8000` 에 띄운 뒤:
 
 ```bash
 cd frontend
@@ -53,7 +72,9 @@ npm install
 npm run dev
 ```
 
-`http://127.0.0.1:5173` — Vite가 `/api`를 백엔드로 프록시합니다. 배포 시 `VITE_API_BASE`를 설정한 뒤 `npm run build` 하세요.
+**프로덕션 빌드 미리보기** (`npm run preview`)도 `vite.config.ts`에 동일한 `/api` 프록시가 있어, 백엔드가 켜져 있으면 같은 방식으로 연결됩니다.
+
+정적 파일을 **다른 도메인**에만 올릴 때는 빌드 전에 `frontend/.env.production` 등에 `VITE_API_BASE=https://백엔드-주소` 를 넣으세요 (`frontend/.env.example` 참고).
 
 ## 주의
 

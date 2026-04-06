@@ -927,6 +927,123 @@ textarea.txt {
   white-space: pre-wrap;
 }
 
+/* 리스트(ul) — 네온 보더 + 항목 스태거 등장 (flow-steps 제외) */
+.panel-result ul:not(.flow-steps),
+.member-feedback-card ul:not(.flow-steps) {
+  list-style: none;
+  margin: 0.5rem 0 1rem;
+  padding: 0.65rem 0.5rem 0.85rem 0.35rem;
+  border-radius: 0 6px 6px 0;
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.07), rgba(168, 85, 247, 0.04), transparent);
+  box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.12), 0 4px 24px rgba(0, 0, 0, 0.35);
+  animation: ulContainerPulse 5s ease-in-out infinite alternate;
+}
+
+.panel-result ul:not(.flow-steps) li,
+.member-feedback-card ul:not(.flow-steps) li {
+  position: relative;
+  padding: 0.5rem 0.5rem 0.5rem 1.5rem;
+  margin: 0.4rem 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  color: #d0d8e8;
+  border-radius: 4px;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-8px);
+  animation: listItemStagger 0.65s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  transition: box-shadow 0.35s ease, transform 0.25s ease;
+}
+
+.panel-result ul:not(.flow-steps) li::before,
+.member-feedback-card ul:not(.flow-steps) li::before {
+  content: "";
+  position: absolute;
+  left: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 12px var(--neon-cyan), 0 0 24px rgba(0, 240, 255, 0.35);
+  animation: listBulletOrbit 2.8s ease-in-out infinite;
+}
+
+.panel-result ul:not(.flow-steps) li:nth-child(odd)::before,
+.member-feedback-card ul:not(.flow-steps) li:nth-child(odd)::before {
+  background: var(--neon-magenta);
+  box-shadow: 0 0 12px var(--neon-magenta), 0 0 22px rgba(255, 45, 149, 0.35);
+  animation-delay: 0.4s;
+}
+
+.panel-result ul:not(.flow-steps) li::after,
+.member-feedback-card ul:not(.flow-steps) li::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 40%, rgba(0, 240, 255, 0.06) 50%, transparent 60%);
+  background-size: 200% 100%;
+  animation: listShimmer 3.5s ease-in-out infinite;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+.panel-result ul:not(.flow-steps) li:hover,
+.member-feedback-card ul:not(.flow-steps) li:hover {
+  transform: translateX(2px) scale(1.01);
+  box-shadow: 0 0 18px rgba(0, 212, 255, 0.2), inset 0 0 20px rgba(168, 85, 247, 0.08);
+}
+
+.panel-result ul:not(.flow-steps) li:nth-child(1),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(1) {
+  animation-delay: 0.06s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(2),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(2) {
+  animation-delay: 0.14s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(3),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(3) {
+  animation-delay: 0.22s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(4),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(4) {
+  animation-delay: 0.3s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(5),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(5) {
+  animation-delay: 0.38s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(6),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(6) {
+  animation-delay: 0.46s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(7),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(7) {
+  animation-delay: 0.54s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(8),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(8) {
+  animation-delay: 0.62s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(9),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(9) {
+  animation-delay: 0.7s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(10),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(10) {
+  animation-delay: 0.78s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(11),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(11) {
+  animation-delay: 0.86s;
+}
+.panel-result ul:not(.flow-steps) li:nth-child(12),
+.member-feedback-card ul:not(.flow-steps) li:nth-child(12) {
+  animation-delay: 0.94s;
+}
+
 .future {
   border-left: 3px solid var(--neon-cyan);
   padding-left: 0.65rem;
@@ -1057,6 +1174,49 @@ textarea.txt {
   }
 }
 
+@keyframes ulContainerPulse {
+  0% {
+    box-shadow: inset 0 0 0 1px rgba(0, 212, 255, 0.12), 0 4px 24px rgba(0, 0, 0, 0.35),
+      0 0 20px rgba(0, 212, 255, 0.06);
+  }
+  100% {
+    box-shadow: inset 0 0 0 1px rgba(168, 85, 247, 0.22), 0 6px 32px rgba(0, 0, 0, 0.45),
+      0 0 28px rgba(255, 45, 149, 0.1);
+  }
+}
+
+@keyframes listItemStagger {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes listBulletOrbit {
+  0%,
+  100% {
+    transform: translateY(-50%) scale(1);
+    filter: brightness(1);
+  }
+  50% {
+    transform: translateY(-50%) scale(1.2);
+    filter: brightness(1.4);
+  }
+}
+
+@keyframes listShimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 /* 팀 기여도 결과 표 */
 .data-table {
   width: 100%;
@@ -1183,5 +1343,16 @@ textarea.txt {
 
   .ambient-bg::before {
     animation: none;
+  }
+
+  .panel-result ul:not(.flow-steps) li,
+  .member-feedback-card ul:not(.flow-steps) li {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .panel-result ul:not(.flow-steps) li::after,
+  .member-feedback-card ul:not(.flow-steps) li::after {
+    opacity: 0 !important;
   }
 }
