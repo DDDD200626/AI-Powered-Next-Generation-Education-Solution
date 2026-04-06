@@ -5,6 +5,13 @@ const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 const REPO_URL =
   "https://github.com/DDDD200626/AI-Powered-Next-Generation-Education-Solution";
 
+/** 심사기준 — 평가 요청 시 AI·문서에 반영되도록 기본 문구 */
+const DEFAULT_TEAM_EVALUATION_CRITERIA = `심사기준(평가 시 참고):
+■ 기술적 완성도 — 시스템 구조·API·시각화·예외 처리
+■ AI 활용 능력 및 효율성 — 다중 모델·생성형 보강(선택)·휴리스틱 폴백
+■ 기획력 및 실무 접합성 — 팀 과제·교육 운영(지표·동료·결과 점수·협업)과의 연결
+■ 창의성 — 기여-결과 불일치·협업 네트워크·역할 유형·고급 이상 탐지·규칙 기반 설명 카드·팀 역할 밸런스·면담 질문 키트·가상 시뮬레이터`;
+
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
@@ -18,8 +25,7 @@ type SiteView =
   | "syllabus"
   | "discussion"
   | "rubric"
-  | "llm"
-  | "about";
+  | "llm";
 
 interface ProviderKeys {
   gemini?: boolean;
@@ -128,6 +134,31 @@ interface AnomalyAlert {
   message?: string;
 }
 
+interface MemberExplainFact {
+  member_name: string;
+  facts: string[];
+}
+
+interface TeamRoleBalance {
+  dev: number;
+  doc: number;
+  leader: number;
+  supporter: number;
+  balance_hint: string;
+}
+
+interface ReflectionKit {
+  team_storyline: string;
+  teacher_questions: string[];
+  encouragement_line: string;
+}
+
+interface CreativeInsights {
+  explain_facts: MemberExplainFact[];
+  team_role_balance: TeamRoleBalance;
+  reflection_kit: ReflectionKit;
+}
+
 interface TeamEvaluateResponse {
   mode: string;
   members: TeamMemberOut[];
@@ -138,6 +169,10 @@ interface TeamEvaluateResponse {
   mismatches?: MismatchItem[];
   anomaly_alerts?: AnomalyAlert[];
   advanced_mode?: string;
+  creative_insights?: CreativeInsights;
+  request_id?: string;
+  generated_at?: string;
+  processing_ms?: number;
   disclaimer?: string;
 }
 
@@ -347,7 +382,7 @@ const state: {
   team: {
     project_name: "",
     project_description: "",
-    evaluation_criteria: "",
+    evaluation_criteria: DEFAULT_TEAM_EVALUATION_CRITERIA,
     members: [emptyTeamMember(), emptyTeamMember()],
     collaboration_edges_json: "",
     result: null,
@@ -416,6 +451,102 @@ function parseOptInt(s: string): number | null {
   if (!t) return null;
   const n = parseInt(t, 10);
   return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+const TEAM_DRAFT_KEY = "team_eval_draft_v2";
+let teamDraftTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTeamDraftSave(): void {
+  if (state.view !== "team") return;
+  if (teamDraftTimer) clearTimeout(teamDraftTimer);
+  teamDraftTimer = setTimeout(() => {
+    teamDraftTimer = null;
+    readTeamForm();
+    try {
+      const payload = {
+        project_name: state.team.project_name,
+        project_description: state.team.project_description,
+        evaluation_criteria: state.team.evaluation_criteria,
+        collaboration_edges_json: state.team.collaboration_edges_json,
+        members: state.team.members,
+      };
+      localStorage.setItem(TEAM_DRAFT_KEY, JSON.stringify(payload));
+    } catch {
+      /* 저장소 불가 시 무시 */
+    }
+  }, 750);
+}
+
+function clearTeamDraft(): void {
+  try {
+    localStorage.removeItem(TEAM_DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+function hydrateTeamDraftIfEmpty(): void {
+  const hasInput =
+    state.team.project_name.trim() !== "" ||
+    state.team.project_description.trim() !== "" ||
+    state.team.members.some((m) => m.name.trim() !== "");
+  if (hasInput) return;
+  try {
+    const raw = localStorage.getItem(TEAM_DRAFT_KEY);
+    if (!raw) return;
+    const d = JSON.parse(raw) as {
+      project_name?: string;
+      project_description?: string;
+      evaluation_criteria?: string;
+      collaboration_edges_json?: string;
+      members?: TeamMemberRow[];
+    };
+    if (typeof d.project_name === "string") state.team.project_name = d.project_name;
+    if (typeof d.project_description === "string") state.team.project_description = d.project_description;
+    if (typeof d.evaluation_criteria === "string") state.team.evaluation_criteria = d.evaluation_criteria;
+    if (typeof d.collaboration_edges_json === "string") state.team.collaboration_edges_json = d.collaboration_edges_json;
+    if (Array.isArray(d.members) && d.members.length > 0) {
+      state.team.members = d.members.map((m) => ({
+        ...emptyTeamMember(),
+        ...m,
+        timeline: m.timeline?.length ? m.timeline : emptyTeamMember().timeline,
+      }));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function teamExportSummaryText(res: TeamEvaluateResponse): string {
+  const lines: string[] = [];
+  lines.push(`프로젝트: ${state.team.project_name || "(이름 없음)"}`);
+  lines.push(`모드: ${res.mode} · 고급: ${res.advanced_mode ?? ""}`);
+  if (res.request_id) lines.push(`요청 ID: ${res.request_id}`);
+  if (res.generated_at) lines.push(`생성 시각: ${res.generated_at}`);
+  if (res.processing_ms != null) lines.push(`서버 처리: ${res.processing_ms}ms`);
+  lines.push("");
+  res.members.forEach((m) => {
+    lines.push(
+      `- ${m.name}: 기여 ${m.contribution_index.toFixed(1)} · 의심도 ${m.free_rider_risk ?? "—"} · ${m.contribution_type_label || "유형 미분류"}`
+    );
+  });
+  const ci = res.creative_insights;
+  if (ci?.reflection_kit?.team_storyline) {
+    lines.push("");
+    lines.push("[창의 인사이트 · 팀 스토리라인]");
+    lines.push(ci.reflection_kit.team_storyline);
+  }
+  if (ci?.reflection_kit?.teacher_questions?.length) {
+    lines.push("");
+    lines.push("[교육자용 질문]");
+    ci.reflection_kit.teacher_questions.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
+  }
+  if (res.contribution_outcome_summary) {
+    lines.push("");
+    lines.push("[기여·결과]");
+    lines.push(res.contribution_outcome_summary);
+  }
+  return lines.join("\n");
 }
 
 async function refreshHealth(): Promise<void> {
@@ -594,6 +725,7 @@ async function submitTeam(): Promise<void> {
       return;
     }
     state.team.result = data;
+    clearTeamDraft();
   } catch (e) {
     state.team.error = e instanceof Error ? e.message : String(e);
   } finally {
@@ -964,7 +1096,6 @@ function navHtml(): string {
       <nav class="nav" aria-label="주요 메뉴">
         <button type="button" class="${cur("team")}" data-view="team">평가</button>
         <button type="button" class="${cur("hub")}" data-view="hub">부가 도구</button>
-        <button type="button" class="${cur("about")}" data-view="about">안내</button>
         <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
     </div>
@@ -1052,20 +1183,6 @@ function hubHtml(): string {
   </div>`;
 }
 
-function aboutHtml(): string {
-  return `
-  <div class="page page-animate about-page">
-    <h1 class="page-title">팀 기여도 자동 평가 — 안내</h1>
-    <div class="prose-block">
-      <p><strong>이 시스템은.</strong> 팀 프로젝트에서 수집 가능한 지표와 서술을 넣으면 <strong>기여도 초안·의심 신호·타임라인·피드백 문단</strong>을 자동으로 뽑아 주는 <strong>교육 보조 도구</strong>입니다.</p>
-      <p><strong>한계.</strong> 출력은 <strong>참고용</strong>이며, 최종 성적·평가·징계·팀 내 갈등 조정은 <strong>교수·조교·기관 절차</strong>와 대면 확인이 필요합니다. 무임승차 표시는 통계·키워드 기반입니다.</p>
-      <p><strong>API 키.</strong> <code>backend/.env</code> — 팀 평가 품질을 올리려면 <code>OPENAI_API_KEY</code> 권장(없으면 휴리스틱). <strong>부가 도구</strong> 중 과제 피드백 초안은 OpenAI 필수입니다.</p>
-      <p><strong>개인정보.</strong> 실명 대신 익명 라벨 사용을 권장합니다.</p>
-      <p><strong>소스 코드.</strong> <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub 저장소</a></p>
-    </div>
-  </div>`;
-}
-
 function teamMemberBlock(i: number, m: TeamMemberRow): string {
   const tl = m.timeline?.length ? m.timeline : [0, 1, 2, 3].map(() => emptyTimelineRow());
   const timelineRows = tl.slice(0, 4).map((row, j) => {
@@ -1115,16 +1232,16 @@ function teamNetworkSvg(net: NetworkGraph | undefined): string {
       const b = pos.get(e.target);
       if (!a || !b) return "";
       const sw = Math.max(0.6, Math.min(5, (e.weight / 100) * 5));
-      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(0,240,255,0.4)" stroke-width="${sw}" />`;
+      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(37,99,235,0.35)" stroke-width="${sw}" />`;
     })
     .join("");
   const circles = net.nodes
     .map((n) => {
       const lab = n.label || n.id;
       return `<g>
-      <circle cx="${n.x}" cy="${n.y}" r="20" fill="rgba(12,18,28,0.95)" stroke="var(--border)" stroke-width="1" />
-      <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="#e2e8f0" font-size="10">${escapeHtml(lab)}</text>
-      <text x="${n.x}" y="${n.y + 28}" text-anchor="middle" fill="#7a8aa0" font-size="8">${n.contribution_index.toFixed(0)}</text>
+      <circle cx="${n.x}" cy="${n.y}" r="20" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5" />
+      <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="#0f172a" font-size="10" font-family="system-ui,sans-serif">${escapeHtml(lab)}</text>
+      <text x="${n.x}" y="${n.y + 28}" text-anchor="middle" fill="#64748b" font-size="8" font-family="system-ui,sans-serif">${n.contribution_index.toFixed(0)}</text>
     </g>`;
     })
     .join("");
@@ -1153,7 +1270,7 @@ function teamTimelineSvg(members: TeamMemberOut[]): string {
   const padB = 40;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
-  const colors = ["#00f0ff", "#ff2d95", "#a855f7", "#00ffa3", "#ffd000", "#ff8866"];
+  const colors = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#0891b2", "#dc2626"];
   let maxY = 40;
   for (const m of members) {
     for (const p of m.timeline || []) {
@@ -1185,7 +1302,7 @@ function teamTimelineSvg(members: TeamMemberOut[]): string {
   const xLabels = labels
     .map((lab, t) => {
       const x = k === 1 ? padL + chartW / 2 : padL + (t / Math.max(1, k - 1)) * chartW;
-      return `<text x="${x}" y="${H - 12}" text-anchor="middle" fill="#7a8aa0" font-size="10">${escapeHtml(lab)}</text>`;
+      return `<text x="${x}" y="${H - 12}" text-anchor="middle" fill="#64748b" font-size="10" font-family="system-ui,sans-serif">${escapeHtml(lab)}</text>`;
     })
     .join("");
 
@@ -1201,11 +1318,180 @@ function teamTimelineSvg(members: TeamMemberOut[]): string {
     <h3 class="subh">기여도 변화 (시간에 따른 팀 내 상대 비중 %)</h3>
     <p class="muted small legend-line">${legend}</p>
     <svg class="timeline-chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="기여도 타임라인">
-      <rect x="${padL}" y="${padT}" width="${chartW}" height="${chartH}" fill="rgba(16,20,28,0.4)" stroke="var(--border)" stroke-width="1" rx="2"/>
+      <rect x="${padL}" y="${padT}" width="${chartW}" height="${chartH}" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" rx="2"/>
       ${lines.join("")}
       ${xLabels}
     </svg>
   </div>`;
+}
+
+function normNums(vals: number[]): number[] {
+  const s = vals.reduce((a, b) => a + b, 0) || 1;
+  return vals.map((v) => v / s);
+}
+
+/** 백엔드 `_heuristic`과 동일한 가중(커밋·태스크·라인·PR·자기서술 분량). */
+function heuristicContributionIndicesFromRows(members: TeamMemberRow[]): number[] {
+  const n = members.length;
+  if (n === 0) return [];
+  const parseN = (s: string) => {
+    const x = parseFloat(String(s).trim());
+    return Number.isFinite(x) && x >= 0 ? x : 0;
+  };
+  const commits = members.map((m) => parseN(m.commits));
+  const tasks = members.map((m) => parseN(m.tasks_completed));
+  const lines = members.map((m) => parseN(m.lines_changed));
+  const prs = members.map((m) => parseN(m.pull_requests));
+  const words = members.map((m) =>
+    Math.max(0, (m.self_report || "").trim().split(/\s+/).filter(Boolean).length)
+  );
+  const nc = normNums(commits);
+  const nt = normNums(tasks);
+  const nl = normNums(lines);
+  const npr = normNums(prs);
+  const nw = normNums(words.map((w) => w));
+  const raw = members.map(
+    (_, i) => 0.22 * nc[i] + 0.18 * nt[i] + 0.18 * nl[i] + 0.12 * npr[i] + 0.3 * nw[i]
+  );
+  const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
+  return raw.map((x) => Math.round((10000 * x) / rawSum) / 100);
+}
+
+function simulateExtraCommits(members: TeamMemberRow[], memberIdx: number, extra: number): number[] {
+  const parseN = (s: string) => {
+    const x = parseFloat(String(s).trim());
+    return Number.isFinite(x) && x >= 0 ? x : 0;
+  };
+  const copy = members.map((m, i) =>
+    i === memberIdx ? { ...m, commits: String(parseN(m.commits) + extra) } : m
+  );
+  return heuristicContributionIndicesFromRows(copy);
+}
+
+function teamRoleRadarSvg(b: TeamRoleBalance): string {
+  const vals = [b.dev, b.doc, b.leader, b.supporter];
+  const labels = ["개발", "문서", "리더", "서포터"];
+  const cx = 100;
+  const cy = 100;
+  const rmax = 78;
+  const n = 4;
+  const grid = [0.25, 0.5, 0.75, 1].map(
+    (t) =>
+      `<circle cx="${cx}" cy="${cy}" r="${rmax * t}" fill="none" stroke="#e2e8f0" stroke-width="1" />`
+  );
+  const axes = labels
+    .map((lab, i) => {
+      const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
+      const x2 = cx + rmax * Math.cos(ang);
+      const y2 = cy + rmax * Math.sin(ang);
+      const lx = cx + (rmax + 14) * Math.cos(ang);
+      const ly = cy + (rmax + 14) * Math.sin(ang);
+      return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#cbd5e1" stroke-width="1" /><text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" fill="#475569" font-size="10" font-family="system-ui,sans-serif">${lab}</text>`;
+    })
+    .join("");
+  const pts = vals.map((v, i) => {
+    const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
+    const rr = (Math.min(100, Math.max(0, v)) / 100) * rmax;
+    return [cx + rr * Math.cos(ang), cy + rr * Math.sin(ang)];
+  });
+  const pathD =
+    pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ") + " Z";
+  return `<svg class="radar-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-label="팀 평균 역할 밸런스">
+    ${grid.join("")}
+    ${axes}
+    <path d="${pathD}" fill="rgba(37,99,235,0.12)" stroke="#2563eb" stroke-width="2" />
+  </svg>`;
+}
+
+function teamCreativePanelHtml(res: TeamEvaluateResponse): string {
+  const c = res.creative_insights;
+  if (!c) return "";
+  const rk = c.reflection_kit;
+  const factsHtml = (c.explain_facts || [])
+    .map(
+      (x) => `
+    <article class="fact-card">
+      <h5 class="fact-card-title">${escapeHtml(x.member_name)}</h5>
+      <ul class="fact-card-ul">${(x.facts || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
+    </article>`
+    )
+    .join("");
+  return `
+  <section class="creative-panel hud-panel" aria-labelledby="creative-heading">
+    <h3 class="subh" id="creative-heading">창의 인사이트 · 설명 가능성 · 면담 키트</h3>
+    <p class="muted small creative-lead">규칙 기반 자동 생성입니다. 징계·단정용이 아니라 <strong>교육·성찰·면담 준비</strong>용입니다.</p>
+    <div class="creative-grid">
+      <div class="creative-col creative-col--story">
+        <h4 class="creative-h4">팀 스토리라인</h4>
+        <p class="prose creative-story">${escapeHtml(rk.team_storyline)}</p>
+        <p class="creative-encourage">${escapeHtml(rk.encouragement_line)}</p>
+      </div>
+      <div class="creative-col creative-col--radar">
+        <h4 class="creative-h4">팀 역할 밸런스 (평균)</h4>
+        ${teamRoleRadarSvg(c.team_role_balance)}
+        <p class="muted small">${escapeHtml(c.team_role_balance.balance_hint)}</p>
+      </div>
+      <div class="creative-col creative-col--questions">
+        <h4 class="creative-h4">교육자용 질문</h4>
+        <ol class="reflection-ol">${(rk.teacher_questions || []).map((q) => `<li>${escapeHtml(q)}</li>`).join("")}</ol>
+      </div>
+    </div>
+    <details class="creative-details">
+      <summary>팀원별 규칙 기반 설명 카드</summary>
+      <div class="fact-card-grid">${factsHtml}</div>
+    </details>
+  </section>`;
+}
+
+function teamSimulatorHtml(): string {
+  const members = state.team.members.filter((m) => m.name.trim());
+  const opts = members
+    .map((m, i) => `<option value="${i}">${escapeHtml(m.name)}</option>`)
+    .join("");
+  return `
+  <section class="creative-sim hud-panel no-print" aria-labelledby="sim-heading">
+    <h3 class="subh" id="sim-heading">가상 시뮬레이터 (교육용)</h3>
+    <p class="muted small">휴리스틱 평가와 동일한 가중으로, 선택한 팀원의 <strong>커밋 수만</strong> 가상 증가시켰을 때의 기여 지수 변화를 보여 줍니다. 실제 서버 재요청이 아닙니다.</p>
+    <div class="grid-2 sim-controls">
+      <div>
+        <label class="lbl" for="team-sim-member">팀원</label>
+        <select class="txt" id="team-sim-member">${opts || '<option value="0">—</option>'}</select>
+      </div>
+      <div>
+        <label class="lbl" for="team-sim-extra">가상 추가 커밋: <span id="team-sim-extra-lbl">0</span></label>
+        <input type="range" class="sim-range" id="team-sim-extra" min="0" max="40" value="0" />
+      </div>
+    </div>
+    <div id="team-sim-output" class="sim-output" aria-live="polite"></div>
+  </section>`;
+}
+
+function updateTeamSimDisplay(): void {
+  readTeamForm();
+  const sel = document.getElementById("team-sim-member") as HTMLSelectElement | null;
+  const range = document.getElementById("team-sim-extra") as HTMLInputElement | null;
+  const lbl = document.getElementById("team-sim-extra-lbl");
+  const out = document.getElementById("team-sim-output");
+  if (!sel || !range || !out) return;
+  const extra = parseInt(range.value, 10) || 0;
+  if (lbl) lbl.textContent = String(extra);
+  const members = state.team.members.filter((m) => m.name.trim());
+  if (members.length === 0) {
+    out.innerHTML = '<p class="muted small">이름이 입력된 팀원이 없습니다.</p>';
+    return;
+  }
+  let idx = parseInt(sel.value, 10);
+  if (!Number.isFinite(idx) || idx < 0 || idx >= members.length) idx = 0;
+  const base = heuristicContributionIndicesFromRows(members);
+  const sim = simulateExtraCommits(members, idx, extra);
+  const rows = members
+    .map((m, i) => {
+      const d = sim[i] - base[i];
+      const delta = d === 0 ? "±0.0" : d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
+      return `<tr><td>${escapeHtml(m.name)}</td><td>${base[i].toFixed(1)}</td><td>${sim[i].toFixed(1)}</td><td class="sim-delta">${delta}</td></tr>`;
+    })
+    .join("");
+  out.innerHTML = `<div class="table-scroll-wrap"><table class="data-table data-table--sim"><thead><tr><th>이름</th><th>현재(추정)</th><th>시뮬</th><th>Δ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function teamResultHtml(): string {
@@ -1223,7 +1509,7 @@ function teamResultHtml(): string {
       const rs = m.role_scores;
       const rsTxt =
         rs && Object.keys(rs).length
-          ? `<span class="muted small">dev ${(rs.dev ?? 0).toFixed(0)} · doc ${(rs.doc ?? 0).toFixed(0)} · leader ${(rs.leader ?? 0).toFixed(0)} · sup ${(rs.supporter ?? 0).toFixed(0)}</span>`
+          ? `<span class="muted small role-scores-mini">개발 ${(rs.dev ?? 0).toFixed(0)} · 문서 ${(rs.doc ?? 0).toFixed(0)} · 리더 ${(rs.leader ?? 0).toFixed(0)} · 서포터 ${(rs.supporter ?? 0).toFixed(0)}</span>`
           : "";
       return `
     <tr class="${m.free_rider_suspected ? "row-suspected" : ""}">
@@ -1288,17 +1574,37 @@ function teamResultHtml(): string {
     res.anomaly_alerts && res.anomaly_alerts.length
       ? `<div class="anomaly-box hud-panel"><h3 class="subh">비정상 행동 탐지 (고급, 참고)</h3>${anom}</div>`
       : "";
+  const metaParts: string[] = [];
+  if (res.request_id) metaParts.push(`요청 ID <code class="meta-code">${escapeHtml(res.request_id)}</code>`);
+  if (res.processing_ms != null) metaParts.push(`처리 ${escapeHtml(String(res.processing_ms))}ms`);
+  if (res.generated_at) metaParts.push(escapeHtml(res.generated_at));
+  const metaLine =
+    metaParts.length > 0
+      ? `<p class="result-meta muted small no-print" role="status">${metaParts.join(" · ")}</p>`
+      : "";
+  const creativeBlock = teamCreativePanelHtml(res);
+  const simBlock = teamSimulatorHtml();
   return `
-  <section class="panel panel-result hud-panel">
+  <section class="panel panel-result hud-panel team-print-root" id="team-printable-root">
+    <div class="result-toolbar no-print" role="toolbar" aria-label="결과 내보내기">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-json">JSON 내보내기</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-copy-summary">요약 복사</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-print">인쇄·PDF</button>
+    </div>
+    ${metaLine}
     <h2>자동 평가 결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span> ${adv}</h2>
     ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
     ${res.free_rider_summary ? `<p class="prose free-rider-summary">${escapeHtml(res.free_rider_summary)}</p>` : ""}
+    ${creativeBlock}
+    ${simBlock}
     ${coSummary}
     ${sigBlock ? `<div class="signals-box">${sigBlock}</div>` : ""}
-    <table class="data-table">
+    <div class="table-scroll-wrap">
+    <table class="data-table data-table--team">
       <thead><tr><th>이름</th><th>기여 지수</th><th>의심도</th><th>기여 유형 (자동)</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
+    </div>
     ${net}
     ${mismatchBlock}
     ${anomBlock}
@@ -1317,12 +1623,14 @@ function teamHtml(): string {
     <h1 class="page-title">팀 프로젝트 기여도 자동 평가</h1>
     <p class="lead analyze-lead">
       정량 지표(커밋·PR·태스크 등)·주차별 활동·자기·동료 서술을 바탕으로 <strong>기여 지수</strong>를 산출하고,
-      <strong>무임승차 의심</strong>·<strong>기여 유형(개발·문서·리더·서포터)</strong>·<strong>기여–결과 불일치</strong>·<strong>협업 네트워크</strong>·<strong>이상 탐지(고급)</strong>·<strong>기여도 타임라인</strong>·<strong>팀원별 AI 피드백</strong>을 제공합니다.
+      <strong>무임승차 의심</strong>·<strong>기여 유형(개발·문서·리더·서포터)</strong>·<strong>기여–결과 불일치</strong>·<strong>협업 네트워크</strong>·<strong>이상 탐지(고급)</strong>·<strong>기여도 타임라인</strong>·<strong>팀원별 AI 피드백</strong>·
+      <strong>창의 인사이트</strong>(팀 스토리라인·역할 밸런스 레이더·면담 질문·설명 카드·가상 시뮬레이터)를 제공합니다.
       OpenAI 키가 있으면 서술 반영 평가·불일치 해설 품질이 올라갑니다. 최종 성적은 교수·기관 규정에 따릅니다.
     </p>
     <div class="pill-row">${providerPills()}</div>
+    <p class="muted small team-practice-hint">입력 내용은 브라우저에 <strong>자동 임시 저장</strong>됩니다(성공적으로 평가하면 삭제). 조교·기록용으로 JSON 내보내기·요약 복사를 활용하세요.</p>
 
-    <section class="panel hud-panel">
+    <section class="panel hud-panel team-form-panel">
       <div class="grid-2">
         <div>
           <label class="lbl">프로젝트명</label>
@@ -1331,8 +1639,8 @@ function teamHtml(): string {
       </div>
       <label class="lbl">프로젝트 설명</label>
       <textarea class="txt" id="team_project_description" rows="2">${escapeHtml(state.team.project_description)}</textarea>
-      <label class="lbl">평가 기준 (선택)</label>
-      <textarea class="txt" id="team_evaluation_criteria" rows="2">${escapeHtml(state.team.evaluation_criteria)}</textarea>
+      <label class="lbl">평가 기준 · 심사기준 (기본값 있음, 수정 가능)</label>
+      <textarea class="txt" id="team_evaluation_criteria" rows="6">${escapeHtml(state.team.evaluation_criteria)}</textarea>
       <label class="lbl">협업 네트워크 (선택, JSON 배열)</label>
       <textarea class="txt mono-input" id="team_collaboration_edges" rows="3" placeholder='[{"source":"이름A","target":"이름B","weight":40}]'>${escapeHtml(state.team.collaboration_edges_json)}</textarea>
       <p class="muted small">source·target은 위 멤버 이름과 동일하게. weight는 0–100. 비우면 서버가 기여 지수로 간선을 추정합니다.</p>
@@ -1346,6 +1654,16 @@ function teamHtml(): string {
       </div>
       ${state.team.error ? `<p class="err">${escapeHtml(state.team.error)}</p>` : ""}
     </section>
+    ${
+      state.team.loading
+        ? `<div class="team-loading hud-panel" aria-live="polite" aria-busy="true">
+      <div class="skeleton-line skeleton-line--long"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line skeleton-line--med"></div>
+      <p class="muted small">다중 분석·피드백 생성 중입니다. 팀 규모·API에 따라 수십 초 걸릴 수 있습니다.</p>
+    </div>`
+        : ""
+    }
     ${teamResultHtml()}
   </div>`;
 }
@@ -1764,8 +2082,6 @@ function mainContentHtml(): string {
   switch (state.view) {
     case "hub":
       return hubHtml();
-    case "about":
-      return aboutHtml();
     case "team":
       return teamHtml();
     case "at-risk":
@@ -1791,9 +2107,7 @@ function render(): void {
   const app = document.getElementById("app");
   if (!app) return;
   app.innerHTML = `
-  <div class="site game-studio">
-    <div class="ambient-bg" aria-hidden="true"></div>
-    <div class="scanlines" aria-hidden="true"></div>
+  <div class="app-shell">
     ${navHtml()}
     <main class="site-main">${mainContentHtml()}</main>
     ${footerHtml()}
@@ -1845,6 +2159,9 @@ function setView(v: SiteView): void {
     readLlmCompareForm();
   }
   state.view = v;
+  if (v === "team") {
+    hydrateTeamDraftIfEmpty();
+  }
   void refreshHealth().then(() => {
     render();
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1886,6 +2203,40 @@ function wire(): void {
   document.getElementById("btn-team-run")?.addEventListener("click", () => {
     void submitTeam();
   });
+
+  document.querySelector(".team-form-panel")?.addEventListener("input", scheduleTeamDraftSave);
+  document.querySelector(".team-form-panel")?.addEventListener("change", scheduleTeamDraftSave);
+
+  document.getElementById("btn-team-export-json")?.addEventListener("click", () => {
+    const r = state.team.result;
+    if (!r) return;
+    const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json;charset=utf-8" });
+    const safe = (state.team.project_name || "team-eval").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${safe}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  document.getElementById("btn-team-copy-summary")?.addEventListener("click", async () => {
+    const r = state.team.result;
+    if (!r) return;
+    const text = teamExportSummaryText(r);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  document.getElementById("btn-team-print")?.addEventListener("click", () => {
+    window.print();
+  });
+
+  document.getElementById("team-sim-member")?.addEventListener("change", updateTeamSimDisplay);
+  document.getElementById("team-sim-extra")?.addEventListener("input", updateTeamSimDisplay);
+  updateTeamSimDisplay();
 
   document.getElementById("btn-ar-add")?.addEventListener("click", () => {
     readAtRiskForm();
