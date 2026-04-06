@@ -1,0 +1,14 @@
+# Render Blueprint 예시: https://render.com/docs/blueprint-spec
+# 대시보드에서 New → Blueprint → 이 저장소 연결 후 OPENAI_API_KEY 설정
+
+services:
+  - type: web
+    name: classpulse
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false

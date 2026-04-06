@@ -74,9 +74,15 @@ Windows에서 `npm`은 되는데 `node`를 못 찾는다면, 터미널을 다시
 
 | 방식 | 설정 |
 |------|------|
-| API만 | `Procfile`의 `uvicorn classpulse.api_app:app`; `OPENAI_API_KEY`; 프론트가 다른 도메인이면 `CORS_ORIGINS`에 콤마로 나열 |
-| API+정적 UI 한 호스트 | `frontend`에서 `npm ci && npm run build` 후 `FRONTEND_DIST=frontend/dist` (저장소 루트 기준) |
+| **Docker (UI+API 한 포트)** | 저장소 루트에서 `docker build -t classpulse .` → `docker run -p 8000:8000 -e OPENAI_API_KEY=sk-... classpulse` → 브라우저 `http://localhost:8000` |
+| API만 | `Procfile`의 `uvicorn classpulse.api_app:app`; `OPENAI_API_KEY`; 프론트가 다른 도메인이면 `CORS_ORIGINS` |
+| API+정적 UI (직접) | `frontend`에서 `npm ci && npm run build` 후 `FRONTEND_DIST=frontend/dist` |
 | 프론트 단독 호스팅 | 빌드 시 `VITE_API_BASE=https://백엔드-URL` |
+| Render | `render.yaml` Blueprint로 연결 후 대시보드에서 `OPENAI_API_KEY` 설정 |
+
+## CI
+
+GitHub에 푸시하면 `.github/workflows/ci.yml`이 Python 의존성·`api_app` import·`frontend` `npm ci`/`build`를 검증합니다.
 
 ## 기존 주식 CLI (선택)
 
