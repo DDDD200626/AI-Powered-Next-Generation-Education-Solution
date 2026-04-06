@@ -7,7 +7,7 @@
 | 영역 | 설명 |
 |------|------|
 | **과정 vs 시험** | Gemini, ChatGPT, Claude, Grok 병렬 (`POST /api/analyze`). 키가 없으면 휴리스틱. |
-| **팀 기여도** | 정량·서술 → 기여 지수 초안 (`POST /api/team/evaluate`). |
+| **팀 기여도** | 정량·서술·주차별 활동 → 기여 지수, **무임승차 의심**, **타임라인**, **팀원별 AI 피드백** (`POST /api/team/evaluate`). |
 | **이탈·위험** | 주차별 참여 → 위험 지수 (`POST /api/at-risk/evaluate`). |
 | **과제 피드백 초안** | 루브릭·제출물 (`POST /api/feedback/draft`). **OpenAI 필수**. |
 | **강의 안내 Q&A** | 실라버스 발췌 + 질문 → 답 초안·인용 (`POST /api/course/ask`). |
