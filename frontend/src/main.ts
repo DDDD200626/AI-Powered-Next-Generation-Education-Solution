@@ -1162,7 +1162,7 @@ function navHtml(): string {
       </a>
       <nav class="nav" aria-label="주요 메뉴">
         <button type="button" class="${cur("team")}" data-view="team">평가</button>
-        <button type="button" class="${cur("hub")}" data-view="hub">부가 도구</button>
+        <button type="button" class="${cur("hub")}" data-view="hub">분석 기능</button>
         <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
     </div>
@@ -1194,46 +1194,67 @@ function hubHtml(): string {
     <section class="hero-block home-hero-main home-hero-visual">
       <div class="hero-orb hero-orb--a" aria-hidden="true"></div>
       <div class="hero-orb hero-orb--b" aria-hidden="true"></div>
-      <p class="eyebrow eyebrow--shine">팀 프로젝트 평가</p>
-      <h1 class="home-headline home-headline--fx">공정한 기여도, 한 화면에서</h1>
-      <p class="hero-text home-lead">
-        <strong>메인은 상단 「평가」의 자동 기여도 평가</strong>입니다. Git·PR·서술·팀 비교로 무임승차·불공정 문제를 줄이는 데 초점을 둡니다. 아래 네 가지는 같은 API에 연결된 <strong>보조</strong> 기능입니다.
-      </p>
-      <p class="muted small home-lead" style="margin-top:0.5rem;">
-        로컬: 루트 <code>npm run dev</code> → API <code>8000</code> + 웹 <code>5173</code> · <code>/api</code> 프록시
-      </p>
-      <div class="pill-row hero-pills">${providerPills()}</div>
+      <p class="eyebrow eyebrow--shine">문제 정의와 해결</p>
+      <h1 class="home-headline home-headline--fx">팀 프로젝트 기여도는 공정하게 평가하기 어렵다</h1>
+      <p class="hero-text home-lead"><strong>해결:</strong> Git 기반 자동 기여도 평가 시스템</p>
+      <div class="pill-row hero-pills">
+        <span class="pill pill-on">자동 기여도 산출</span>
+        <span class="pill pill-on">이상 탐지</span>
+        <span class="pill pill-on">AI 분석</span>
+        <span class="pill pill-muted">AI 기반 분석 (LLM)</span>
+      </div>
       <p class="row-actions" style="margin-top:1rem;">
-        <button type="button" class="btn btn-primary" data-view="team">메인 평가로 이동</button>
+        <button type="button" class="btn btn-primary" data-view="team">기여도 평가 시작하기</button>
       </p>
+      <p class="muted small home-lead">Git 데이터 + 활동 데이터 기반 자동 분석</p>
+    </section>
+
+    <section class="section-block hud-panel result-sample-panel">
+      <h2 class="section-title">평가 결과 예시</h2>
+      <div class="result-sample-grid">
+        <article class="result-sample-card">
+          <p class="result-sample-score">기여도: <strong>82점</strong> (상위 30%)</p>
+          <ul class="result-sample-list">
+            <li>커밋: 30점</li>
+            <li>PR: 20점</li>
+            <li>코드량: 15점</li>
+          </ul>
+        </article>
+        <article class="result-sample-card">
+          <h3>AI 분석</h3>
+          <p>코드 기여 높음, 협업 부족</p>
+          <h3>이상 탐지</h3>
+          <p>없음</p>
+        </article>
+      </div>
     </section>
 
     <section class="section-block hud-section home-section">
-      <h2 class="section-title">보조 도구 (4가지)</h2>
-      <div class="solution-grid">
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">LMS·시험</span>
-          <h3>과정 vs 시험 불일치</h3>
-          <p>과정 지표와 시험 점수를 넣어 불일치 방향·참고 요약을 봅니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="analyze">열기</button>
+      <h2 class="section-title">분석 기능 (평가 보조 분석)</h2>
+      <div class="analysis-flow">
+        <article class="solution-tile solution-tile--live hud-card analysis-step">
+          <span class="solution-badge solution-badge--on">1. 과정 vs 시험 불일치</span>
+          <h3>과제 점수와 시험 점수를 비교해 평가의 불균형을 탐지합니다</h3>
+          <p>과정 데이터와 시험 결과를 비교해 왜 불일치가 발생했는지 확인하고, 평가 이상 징후를 조기에 발견하기 위해 필요합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="analyze">분석 열기</button>
         </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">출석·과제</span>
-          <h3>학습 이탈 신호</h3>
-          <p>출석·과제 제출 비율만으로 <strong>정상 / 위험</strong>을 표시합니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="at-risk">열기</button>
+        <article class="solution-tile solution-tile--live hud-card analysis-step">
+          <span class="solution-badge solution-badge--on">2. 학습 이탈 신호</span>
+          <h3>출석과 과제 데이터를 기반으로 참여 저하 위험을 감지합니다</h3>
+          <p>학습 참여가 낮아지는 시점을 조기에 식별해 개입 타이밍을 잡고, 팀 기여도 하락을 예방하기 위해 필요합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="at-risk">분석 열기</button>
         </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">과제</span>
-          <h3>과제 피드백 초안</h3>
-          <p>루브릭·제출물로 피드백 초안을 만듭니다. 교사 검수 후 전달하세요.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="feedback">열기</button>
+        <article class="solution-tile solution-tile--live hud-card analysis-step">
+          <span class="solution-badge solution-badge--on">3. 과제 피드백</span>
+          <h3>루브릭과 제출물을 분석해 교수 피드백 초안을 생성합니다</h3>
+          <p>반복되는 피드백 작성 시간을 줄이고, 기준에 맞는 일관된 코멘트를 제공하기 위해 필요합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="feedback">분석 열기</button>
         </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">채점</span>
-          <h3>루브릭·정합성</h3>
-          <p>루브릭 초안 생성 또는 채점 코멘트와 루브릭의 일치를 점검합니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="rubric">열기</button>
+        <article class="solution-tile solution-tile--live hud-card analysis-step">
+          <span class="solution-badge solution-badge--on">4. 루브릭 정합성</span>
+          <h3>루브릭 기준과 채점 근거의 일치 여부를 점검합니다</h3>
+          <p>채점 기준의 일관성과 공정성을 유지하고, 평가 결과에 대한 설명 가능성을 높이기 위해 필요합니다.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="rubric">분석 열기</button>
         </article>
       </div>
     </section>
