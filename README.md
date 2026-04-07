@@ -72,6 +72,38 @@ docker compose up --build
 
 API에 Gemini·OpenAI 등 키를 넣으려면 `backend/.env`를 만들고(`.env.example` 참고) `docker compose`에 `env_file`을 추가하거나, `api` 서비스에 환경 변수를 주입하세요.
 
+## 다른 사람에게 보여주기 (같은 Wi‑Fi · 인터넷)
+
+### 같은 Wi‑Fi(랜)에서 휴대폰·다른 PC로 열기
+
+1. 저장소 **루트**에서 백엔드를 **모든 인터페이스**에 바인딩하고 Vite와 함께 띄웁니다.
+
+   ```powershell
+   npm run dev:public
+   ```
+
+   - Vite는 이미 `host: true`라서 터미널에 **Network** 주소(예: `http://192.168.x.x:5173/`)가 나옵니다.  
+   - 기본 `npm run dev`는 API를 `127.0.0.1`에만 붙여 두어, **직접 8000 포트로 붙는 경우**만 LAN에서 막힐 수 있습니다. 외부에 보여줄 때는 위 `dev:public`을 쓰세요.
+
+2. 접속 URL을 한 번에 보려면:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts/share-lan.ps1
+   ```
+
+3. **방화벽**: Windows에서 처음 접속이 막히면, 인바운드 규칙으로 **TCP 5173**(개발) 또는 **TCP 8080**(Docker 웹)을 허용하세요.
+
+4. **Docker만 쓰는 경우**: 같은 네트워크의 다른 기기에서 `http://<이 PC의 IPv4>:8080/` 로 접속하면 됩니다.
+
+### 인터넷 어디서나 임시로 열기 (터널)
+
+로컬에서 앱을 띄운 뒤(개발은 `npm run dev:public`, Docker는 `8080` 등) 아래 중 하나로 공개 URL을 만듭니다.
+
+- [ngrok](https://ngrok.com/): `ngrok http 5173` (또는 Docker면 `ngrok http 8080`)
+- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/tunnel-guide/local/): `cloudflared tunnel --url http://localhost:5173`
+
+터널 URL을 심사위원·동료에게 공유하면 됩니다. **API 키·개인 데이터**가 오가므로 공개 저장소·스크린샷에는 URL을 남기지 마세요.
+
 ## 한 번에 실행 (백엔드 + 프론트) = 방법 A
 
 저장소 **루트**에서 (Python·Node 의존성을 먼저 한 번 설치):

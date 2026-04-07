@@ -6,7 +6,9 @@
     "postinstall": "npm run install:all",
     "bootstrap": "npm install && npm run install:all",
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:public": "concurrently -n api,web -c cyan,magenta \"npm run dev:backend:public\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && python -m uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000",
+    "dev:backend:public": "cd backend && python -m uvicorn learning_analysis.main:app --reload --host 0.0.0.0 --port 8000",
     "dev:frontend": "cd frontend && npm run dev",
     "install:all": "cd frontend && npm install",
     "classpulse": "python -m streamlit run classpulse/app.py"
