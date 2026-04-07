@@ -1111,43 +1111,7 @@ async function submitRubricAlign(): Promise<void> {
 }
 
 function connectionStripHtml(): string {
-  const h = state.health;
-  const docsHref = API_BASE ? `${API_BASE}/docs` : "/docs";
-  const stripClass = h ? "conn-strip conn-strip--live" : "conn-strip conn-strip--partial";
-  const dotClass = h ? "api-dot api-dot--on" : "api-dot api-dot--pulse";
-  const mainMsg = h
-    ? `프론트 ↔ 백엔드 <strong>연결됨</strong> · API <code class="conn-code">${escapeHtml(h.version ?? "?")}</code> · 요청은 <code class="conn-code">/api</code> → 프록시 → <code class="conn-code">:8000</code>`
-    : `프론트 ↔ 백엔드 <strong>대기 중</strong> — 브라우저는 <code class="conn-code">/api/health</code>로 확인합니다. 개발: 루트 <code>npm run dev</code>(API+웹) · Docker: <code>8080</code>`;
-  const retryBtn = h
-    ? ""
-    : `<button type="button" class="btn btn-ghost btn-sm" id="btn-health-retry">다시 연결 확인</button>`;
-  return `
-  <div class="${stripClass}" role="status" aria-live="polite">
-    <div class="conn-strip-inner">
-      <span class="${dotClass}" aria-hidden="true"></span>
-      <span class="conn-msg">${mainMsg}</span>
-      <span class="conn-actions">
-        ${retryBtn}
-        <a class="conn-link" href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI</a>
-      </span>
-    </div>
-  </div>`;
-}
-
-function providerPills(): string {
-  const p = state.health?.providers;
-  const ver = state.health?.version;
-  const verPill = ver ? `<span class="pill pill-muted">API v${escapeHtml(ver)}</span>` : "";
-  const mk = (name: string, on: boolean | undefined) =>
-    `<span class="pill ${on ? "pill-on" : "pill-off"}">${name}</span>`;
-  if (!p) {
-    return verPill
-      ? `${verPill} <span class="pill pill-muted">제공자 확인 중…</span>`
-      : '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
-  }
-  return [verPill, mk("Gemini", p.gemini), mk("ChatGPT", p.openai), mk("Claude", p.claude), mk("Grok", p.grok)]
-    .filter(Boolean)
-    .join(" ");
+  return "";
 }
 
 function navHtml(): string {
@@ -1207,26 +1171,6 @@ function hubHtml(): string {
         <button type="button" class="btn btn-primary" data-view="team">기여도 평가 시작하기</button>
       </p>
       <p class="muted small home-lead">Git 데이터 + 활동 데이터 기반 자동 분석</p>
-    </section>
-
-    <section class="section-block hud-panel result-sample-panel">
-      <h2 class="section-title">평가 결과 예시</h2>
-      <div class="result-sample-grid">
-        <article class="result-sample-card">
-          <p class="result-sample-score">기여도: <strong>82점</strong> (상위 30%)</p>
-          <ul class="result-sample-list">
-            <li>커밋: 30점</li>
-            <li>PR: 20점</li>
-            <li>코드량: 15점</li>
-          </ul>
-        </article>
-        <article class="result-sample-card">
-          <h3>AI 분석</h3>
-          <p>코드 기여 높음, 협업 부족</p>
-          <h3>이상 탐지</h3>
-          <p>없음</p>
-        </article>
-      </div>
     </section>
 
     <section class="section-block hud-section home-section">
@@ -1392,7 +1336,6 @@ function teamHtml(): string {
       Git 기반 팀 데이터로 <strong>공정한 기여도</strong>를 정량·정성으로 평가하고, <strong>설명 가능한 리포트</strong>를 만듭니다.
       <strong>계산(Score Engine) · 판단(Anomaly) · 설명(AI)</strong>을 분리했습니다. AI는 점수를 매기지 않습니다.
     </p>
-    <div class="pill-row">${providerPills()}</div>
     <section class="panel hud-panel team-arch-panel">
       <h3 class="subh">아키텍처 (계산 / 판단 / 설명 분리)</h3>
       <div class="team-arch-grid">
@@ -1400,7 +1343,6 @@ function teamHtml(): string {
         <article class="team-arch-step"><strong>Anomaly Detector</strong><p class="muted small">3~4개 규칙으로 이상 패턴만 표시합니다. AI 미사용.</p></article>
         <article class="team-arch-step"><strong>AI Analyzer</strong><p class="muted small">정량 결과·팀 비교·플래그를 바탕으로 요약·강점·개선·행동만 서술합니다.</p></article>
       </div>
-      <p class="muted small team-arch-connection">API: <code>POST /api/team/report</code> · 프록시 <code>/api</code> → <code>:8000</code></p>
     </section>
     <p class="muted small team-practice-hint">입력 내용은 브라우저에 <strong>자동 임시 저장</strong>됩니다(성공적으로 평가하면 삭제). 조교·기록용으로 JSON 내보내기·요약 복사를 활용하세요.</p>
 
@@ -1701,9 +1643,7 @@ function analyzeHtml(): string {
   <div class="page page-animate analyze-page">
     <p class="eyebrow">보조 · 과정 vs 시험</p>
     <h1 class="page-title">과정 지표와 시험 점수</h1>
-    <p class="lead analyze-lead">LMS·과제 지표와 시험 점수를 넣으면 <strong>불일치 방향</strong>을 참고용으로 요약합니다. 상단 알약은 API 키 연결 상태입니다.</p>
-    <div class="pill-row">${providerPills()}</div>
-
+    <p class="lead analyze-lead">LMS·과제 지표와 시험 점수를 넣으면 <strong>불일치 방향</strong>을 참고용으로 요약합니다.</p>
     <section class="panel hud-panel">
       <div class="grid-2">
         <div>
@@ -1976,10 +1916,6 @@ function wire(): void {
   document.getElementById("btn-analyze-export-json")?.addEventListener("click", () => {
     if (!state.result) return;
     downloadJsonExport("analyze-learning-exam", state.result);
-  });
-
-  document.getElementById("btn-health-retry")?.addEventListener("click", () => {
-    void refreshHealth(true).then(() => renderSync());
   });
 
   document.addEventListener("visibilitychange", () => {
