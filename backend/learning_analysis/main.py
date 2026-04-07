@@ -38,6 +38,7 @@ from edu_tools.discussion import router as discussion_router
 from edu_tools.feedback import router as feedback_router
 from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
+from edu_tools.team_unified_eval import router as team_unified_router
 from learning_analysis.compare_freeform import compare_llm_async
 from learning_analysis.pipeline import analyze_async, provider_keys_status
 from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse, LLMCompareRequest, LLMCompareResponse
@@ -149,6 +150,7 @@ def _capabilities_payload() -> dict[str, Any]:
             "live": "GET /api/live",
             "openapi_json": "GET /openapi.json",
             "team_evaluate": "POST /api/team/evaluate",
+            "team_report": "POST /api/team/report",
             "team_evaluate_compare": "POST /api/team/evaluate/compare",
             "analyze": "POST /api/analyze",
             "llm_compare": "POST /api/llm/compare",
@@ -182,6 +184,7 @@ async def add_request_id_and_timing(request: Request, call_next):
 
 
 app.include_router(team_router, prefix="/api/team", tags=["team"])
+app.include_router(team_unified_router, prefix="/api/team", tags=["team"])
 app.include_router(at_risk_router, prefix="/api/at-risk", tags=["at-risk"])
 app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
 app.include_router(course_qa_router, prefix="/api/course", tags=["course"])

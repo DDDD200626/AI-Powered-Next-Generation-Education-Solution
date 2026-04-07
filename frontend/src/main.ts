@@ -64,10 +64,7 @@ type SiteView =
   | "team"
   | "at-risk"
   | "feedback"
-  | "syllabus"
-  | "discussion"
-  | "rubric"
-  | "llm";
+  | "rubric";
 
 interface ProviderKeys {
   gemini?: boolean;
@@ -109,6 +106,8 @@ interface TeamMemberRow {
   outcome_score: string;
   self_report: string;
   peer_notes: string;
+  /** 출석·참여 % (0–100), 비우면 회의 출석 횟수로 추정 */
+  attendance: string;
   /** 주차별 활동(선택): 입력 시 타임라인에 반영 */
   timeline: { period_label: string; activity_score: string }[];
 }
@@ -316,84 +315,54 @@ interface TeamEvaluateResponse {
   disclaimer?: string;
 }
 
-interface ModelEvalBundle {
-  key: string;
-  label: string;
-  ok: boolean;
-  error?: string | null;
-  result?: TeamEvaluateResponse | null;
+/** POST /api/team/report — Score Engine → Anomaly → AI(설명) */
+interface TeamUnifiedScoreBreakdown {
+  commits: number;
+  prs: number;
+  lines: number;
+  attendance: number;
+  self_report: number;
 }
 
-interface MemberContributionCompare {
+interface TeamUnifiedScoreResult {
   member_name: string;
-  contribution_index_by_model: Record<string, number>;
-  spread: number;
-  mean: number;
-  dimension_spread?: Record<string, number>;
+  rawScore: number;
+  normalizedScore: number;
+  rank: number;
+  top_percent: number;
+  breakdown: TeamUnifiedScoreBreakdown;
+  weighted_points: TeamUnifiedScoreBreakdown;
+  pct_vs_team_mean: number;
+  data_reliability: {
+    score_0_100: number;
+    git_ratio_percent: number;
+    self_report_ratio_percent: number;
+    note?: string;
+  };
 }
 
-interface DivergenceAxisSummary {
-  axis_id: string;
-  axis_label_ko: string;
-  mean_spread: number;
-  max_spread_member: string;
-  interpretation: string;
-}
-
-interface OpinionDivergenceAnalysis {
-  primary_axes: DivergenceAxisSummary[];
-  criteria_segments: string[];
-  criteria_keyword_overlap_note: string;
-  narrative: string;
-}
-
-interface TrustScoreBlock {
-  consistency_0_100: number;
-  rubric_alignment_0_100: number;
-  explanation_quality_0_100: number;
-  overall_trust_0_100: number;
-  notes: string[];
-}
-
-interface ExplainabilityEntry {
-  model_key: string;
-  model_label: string;
+interface TeamUnifiedAnomaly {
   member_name: string;
-  contribution_index: number;
-  technical: number;
-  collaboration: number;
-  initiative: number;
-  evidence_summary: string;
-  caveats: string;
-  why_one_liner: string;
+  flags: string[];
 }
 
-interface EvaluationPipelineStep {
-  step: number;
-  title_ko: string;
-  status: string;
-  detail: string;
+interface TeamUnifiedAnalysis {
+  member_name: string;
+  summary: string;
+  strengths: string[];
+  weaknesses: string[];
+  position_in_team: string;
+  recommended_actions: string[];
 }
 
-interface TeamCompareResponse {
-  request_id?: string;
-  generated_at?: string;
-  processing_ms?: number;
-  product_mode?: string;
-  pipeline_steps?: EvaluationPipelineStep[];
-  models: ModelEvalBundle[];
-  member_comparison: MemberContributionCompare[];
-  comparison_summary: string;
-  divergence?: OpinionDivergenceAnalysis | null;
-  trust_scores?: TrustScoreBlock | null;
-  explainability?: ExplainabilityEntry[];
-  disclaimer?: string;
-}
-
-interface WeekRow {
-  week_label: string;
-  engagement: string;
-  assessment_score: string;
+interface TeamUnifiedReport {
+  scores: TeamUnifiedScoreResult[];
+  anomalies: TeamUnifiedAnomaly[];
+  analysis: TeamUnifiedAnalysis[];
+  edge_cases: string[];
+  trust_scores: Record<string, number>;
+  evaluation_log: Record<string, unknown>;
+  disclaimer: string;
 }
 
 interface AtRiskResponse {
@@ -410,22 +379,6 @@ interface FeedbackResponse {
   draft_feedback: string;
   strengths: string[];
   improvements: string[];
-  disclaimer?: string;
-}
-
-interface CourseAskResponse {
-  mode: string;
-  answer_draft: string;
-  citations: string[];
-  caveats?: string;
-}
-
-interface DiscussionSynthesizeResponse {
-  mode: string;
-  summary: string;
-  themes: string[];
-  participation_notes: string;
-  suggested_followups: string[];
   disclaimer?: string;
 }
 
@@ -451,21 +404,6 @@ interface RubricGenerateResponse {
   disclaimer?: string;
 }
 
-interface LLMTextResult {
-  provider: string;
-  model_label: string;
-  ok: boolean;
-  text: string;
-  error?: string | null;
-}
-
-interface LLMCompareResponse {
-  providers_used: string[];
-  providers_skipped: string[];
-  results: LLMTextResult[];
-  disclaimer: string;
-}
-
 function emptyTimelineRow(): { period_label: string; activity_score: string } {
   return { period_label: "", activity_score: "" };
 }
@@ -482,6 +420,7 @@ function emptyTeamMember(): TeamMemberRow {
     outcome_score: "",
     self_report: "",
     peer_notes: "",
+    attendance: "",
     timeline: [
       emptyTimelineRow(),
       emptyTimelineRow(),
@@ -530,17 +469,12 @@ function applyDemoTeamData(): void {
   c.outcome_score = "82";
   c.self_report = "요구사항 정리·회의록·사용자 가이드 작성.";
   c.peer_notes = "";
+  a.attendance = "85";
+  b.attendance = "80";
+  c.attendance = "88";
   state.team.members = [a, b, c];
-  state.team.result = null;
+  state.team.report = null;
   state.team.error = null;
-}
-
-function emptyWeekRow(): WeekRow {
-  return { week_label: "", engagement: "", assessment_score: "" };
-}
-
-function emptyDiscussionPost(): { author: string; text: string } {
-  return { author: "", text: "" };
 }
 
 function escapeHtml(s: string): string {
@@ -588,16 +522,17 @@ const state: {
     members: TeamMemberRow[];
     /** JSON 배열: [{"source":"이름","target":"이름","weight":0-100}] */
     collaboration_edges_json: string;
-    result: TeamEvaluateResponse | null;
+    report: TeamUnifiedReport | null;
     loading: boolean;
-    compareLoading: boolean;
-    compareResult: TeamCompareResponse | null;
     error: string | null;
   };
   atRisk: {
     course_name: string;
     student_label: string;
-    weeks: WeekRow[];
+    /** 출석·출첵 비율 % (0–100) */
+    attendance_ratio: string;
+    /** 과제 제출 비율 % (0–100) */
+    assignment_ratio: string;
     notes: string;
     result: AtRiskResponse | null;
     loading: boolean;
@@ -608,21 +543,6 @@ const state: {
     assignment_prompt: string;
     submission: string;
     result: FeedbackResponse | null;
-    loading: boolean;
-    error: string | null;
-  };
-  syllabus: {
-    course_name: string;
-    syllabus_text: string;
-    question: string;
-    result: CourseAskResponse | null;
-    loading: boolean;
-    error: string | null;
-  };
-  discussion: {
-    thread_title: string;
-    posts: { author: string; text: string }[];
-    result: DiscussionSynthesizeResponse | null;
     loading: boolean;
     error: string | null;
   };
@@ -640,14 +560,6 @@ const state: {
     assignment_type: string;
     max_criteria: string;
     result: RubricGenerateResponse | null;
-    loading: boolean;
-    error: string | null;
-  };
-  llmCompare: {
-    task_title: string;
-    system_hint: string;
-    prompt: string;
-    result: LLMCompareResponse | null;
     loading: boolean;
     error: string | null;
   };
@@ -677,16 +589,15 @@ const state: {
     evaluation_criteria: DEFAULT_TEAM_EVALUATION_CRITERIA,
     members: [emptyTeamMember(), emptyTeamMember()],
     collaboration_edges_json: "",
-    result: null,
+    report: null,
     loading: false,
-    compareLoading: false,
-    compareResult: null,
     error: null,
   },
   atRisk: {
     course_name: "",
     student_label: "",
-    weeks: [emptyWeekRow(), emptyWeekRow(), emptyWeekRow()],
+    attendance_ratio: "",
+    assignment_ratio: "",
     notes: "",
     result: null,
     loading: false,
@@ -696,21 +607,6 @@ const state: {
     rubric: "",
     assignment_prompt: "",
     submission: "",
-    result: null,
-    loading: false,
-    error: null,
-  },
-  syllabus: {
-    course_name: "",
-    syllabus_text: "",
-    question: "",
-    result: null,
-    loading: false,
-    error: null,
-  },
-  discussion: {
-    thread_title: "",
-    posts: [emptyDiscussionPost(), emptyDiscussionPost()],
     result: null,
     loading: false,
     error: null,
@@ -728,14 +624,6 @@ const state: {
     learning_objectives: "",
     assignment_type: "",
     max_criteria: "5",
-    result: null,
-    loading: false,
-    error: null,
-  },
-  llmCompare: {
-    task_title: "",
-    system_hint: "",
-    prompt: "",
     result: null,
     loading: false,
     error: null,
@@ -758,8 +646,6 @@ function parseOptInt(s: string): number | null {
 
 const TEAM_DRAFT_KEY = "team_eval_draft_v2";
 let teamDraftTimer: ReturnType<typeof setTimeout> | null = null;
-let teamSimRafId = 0;
-
 function scheduleTeamDraftSave(): void {
   if (state.view !== "team") return;
   if (teamDraftTimer) clearTimeout(teamDraftTimer);
@@ -821,74 +707,21 @@ function hydrateTeamDraftIfEmpty(): void {
   }
 }
 
-function teamExportSummaryText(res: TeamEvaluateResponse): string {
+function teamUnifiedExportSummaryText(res: TeamUnifiedReport): string {
   const lines: string[] = [];
   lines.push(`프로젝트: ${state.team.project_name || "(이름 없음)"}`);
-  lines.push(`모드: ${res.mode} · 고급: ${res.advanced_mode ?? ""}`);
-  if (res.product_tagline_ko?.trim()) {
-    lines.push("");
-    lines.push(res.product_tagline_ko.trim());
-  }
-  if (res.team_dashboard?.length) {
-    lines.push("");
-    lines.push("[팀 대시보드 · Rule 혼합]");
-    res.team_dashboard.forEach((row) => {
-      lines.push(
-        `#${row.rank} ${row.member_name}: ${row.final_rule_score.toFixed(1)} · ${row.grade_ko || "—"} · ${row.risk_level || "—"}${row.suspected_highlight ? " ⚠" : ""}`
-      );
-    });
-  }
-  const et = res.evaluation_trust;
-  if (et && et.score_0_100 != null) {
-    lines.push("");
-    lines.push(`[평가 신뢰도] ${et.score_0_100.toFixed(0)}/100 · ${et.level_ko || "—"}`);
-  }
-  if (res.team_risk?.summary_ko?.trim()) {
-    lines.push("");
-    lines.push("[팀 리스크]");
-    lines.push(res.team_risk.summary_ko.trim());
-  }
-  if (res.request_id) lines.push(`요청 ID: ${res.request_id}`);
-  if (res.generated_at) lines.push(`생성 시각: ${res.generated_at}`);
-  if (res.processing_ms != null) lines.push(`서버 처리: ${res.processing_ms}ms`);
+  const log = res.evaluation_log as { request_id?: string; timestamp?: string };
+  if (log.request_id) lines.push(`요청 ID: ${log.request_id}`);
+  if (log.timestamp) lines.push(`시각: ${log.timestamp}`);
   lines.push("");
-  res.members.forEach((m) => {
-    lines.push(
-      `- ${m.name}: 기여 ${m.contribution_index.toFixed(1)} · 의심도 ${m.free_rider_risk ?? "—"} · ${m.contribution_type_label || "유형 미분류"}`
-    );
+  res.scores.forEach((s) => {
+    const n = res.analysis.find((x) => x.member_name === s.member_name);
+    lines.push(`— ${s.member_name}`);
+    lines.push(`  정규화 점수 ${s.normalizedScore.toFixed(0)} · 순위 ${s.rank}/${res.scores.length} · 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%`);
+    const t = res.trust_scores[s.member_name];
+    if (t != null) lines.push(`  신뢰도 ${t.toFixed(0)}%`);
+    if (n?.summary) lines.push(`  ${n.summary}`);
   });
-  if (res.freerider_detection_overview) {
-    lines.push("");
-    lines.push("[무임승차 자동 탐지 · 4단계]");
-    lines.push(res.freerider_detection_overview);
-  }
-  const ci = res.creative_insights;
-  if (ci?.team_health_score != null) {
-    lines.push("");
-    lines.push(`[팀 협업 건강도(참고)] ${ci.team_health_score.toFixed(1)} / 100`);
-    if (ci.team_health_hint) lines.push(ci.team_health_hint);
-  }
-  const pt = res.practical_toolkit;
-  if (pt?.teacher_checklist?.length) {
-    lines.push("");
-    lines.push("[교육자 실무 체크리스트]");
-    pt.teacher_checklist.forEach((x, i) => lines.push(`${i + 1}. ${x}`));
-  }
-  if (ci?.reflection_kit?.team_storyline) {
-    lines.push("");
-    lines.push("[창의 인사이트 · 팀 스토리라인]");
-    lines.push(ci.reflection_kit.team_storyline);
-  }
-  if (ci?.reflection_kit?.teacher_questions?.length) {
-    lines.push("");
-    lines.push("[교육자용 질문]");
-    ci.reflection_kit.teacher_questions.forEach((q, i) => lines.push(`${i + 1}. ${q}`));
-  }
-  if (res.contribution_outcome_summary) {
-    lines.push("");
-    lines.push("[기여·결과]");
-    lines.push(res.contribution_outcome_summary);
-  }
   return lines.join("\n");
 }
 
@@ -979,6 +812,7 @@ function readTeamForm(): void {
     lines_changed: g(`tm_lines_${i}`)?.value ?? "",
     tasks_completed: g(`tm_tasks_${i}`)?.value ?? "",
     meetings_attended: g(`tm_meet_${i}`)?.value ?? "",
+    attendance: g(`tm_attendance_${i}`)?.value ?? "",
     outcome_score: g(`tm_outcome_${i}`)?.value ?? "",
     self_report: g(`tm_self_${i}`)?.value ?? "",
     peer_notes: g(`tm_peer_${i}`)?.value ?? "",
@@ -993,85 +827,47 @@ function readTeamForm(): void {
 async function submitTeam(): Promise<void> {
   readTeamForm();
   state.team.error = null;
-  state.team.result = null;
-  state.team.compareResult = null;
+  state.team.report = null;
   state.team.loading = true;
   renderSync();
 
-  const members = state.team.members
-    .filter((m) => m.name.trim())
-    .map((m) => {
-      const timeline = (m.timeline || [])
-        .filter((row) => row.period_label.trim())
-        .map((row) => {
-          const n = parseFloat(row.activity_score.trim());
-          return Number.isFinite(n)
-            ? { period_label: row.period_label.trim(), activity_score: Math.min(100, Math.max(0, n)) }
-            : null;
-        })
-        .filter((x): x is { period_label: string; activity_score: number } => x !== null);
-      const oc = parseOptFloat(m.outcome_score);
-      return {
-        name: m.name.trim(),
-        role: m.role.trim(),
-        commits: parseOptInt(m.commits),
-        pull_requests: parseOptInt(m.pull_requests),
-        lines_changed: parseOptInt(m.lines_changed),
-        tasks_completed: parseOptInt(m.tasks_completed),
-        meetings_attended: parseOptInt(m.meetings_attended),
-        self_report: m.self_report,
-        peer_notes: m.peer_notes,
-        timeline,
-        ...(oc !== null ? { outcome_score: Math.min(100, Math.max(0, oc)) } : {}),
-      };
-    });
+  const rows = state.team.members.filter((m) => m.name.trim());
+  const teamData = rows.map((m) => {
+    const att = parseOptFloat(m.attendance);
+    const meet = parseOptInt(m.meetings_attended);
+    const attendance =
+      att != null
+        ? Math.min(100, Math.max(0, att))
+        : Math.min(100, Math.max(0, (meet ?? 0) * 12.5));
+    return {
+      name: m.name.trim(),
+      commits: parseOptInt(m.commits) ?? 0,
+      prs: parseOptInt(m.pull_requests) ?? 0,
+      lines: parseOptInt(m.lines_changed) ?? 0,
+      attendance,
+      selfReport: m.self_report,
+    };
+  });
 
-  if (!state.team.project_name.trim() || members.length === 0) {
+  if (!state.team.project_name.trim() || teamData.length === 0) {
     state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
     state.team.loading = false;
     renderSync();
     return;
   }
 
-  let collaboration_edges: { source: string; target: string; weight: number }[] = [];
-  const rawEdges = state.team.collaboration_edges_json.trim();
-  if (rawEdges) {
-    try {
-      const parsed = JSON.parse(rawEdges) as unknown;
-      if (!Array.isArray(parsed)) throw new Error("not array");
-      collaboration_edges = parsed.map((e: unknown) => {
-        if (!e || typeof e !== "object") throw new Error("bad edge");
-        const o = e as Record<string, unknown>;
-        const w = typeof o.weight === "number" ? o.weight : parseFloat(String(o.weight ?? 5));
-        return {
-          source: String(o.source ?? "").trim(),
-          target: String(o.target ?? "").trim(),
-          weight: Number.isFinite(w) ? Math.min(100, Math.max(0, w)) : 5,
-        };
-      });
-    } catch {
-      state.team.error = "협업 네트워크 JSON 형식이 올바르지 않습니다. 예: [{\"source\":\"A\",\"target\":\"B\",\"weight\":40}]";
-      state.team.loading = false;
-      renderSync();
-      return;
-    }
-  }
-
   const body = {
     project_name: state.team.project_name.trim(),
-    project_description: state.team.project_description,
-    evaluation_criteria: state.team.evaluation_criteria,
-    members,
-    collaboration_edges,
+    teamData,
   };
 
   try {
-    const r = await apiFetch("/api/team/evaluate", {
+    const r = await apiFetch("/api/team/report", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = (await r.json()) as TeamEvaluateResponse & { detail?: unknown };
+    const data = (await r.json()) as TeamUnifiedReport & { detail?: unknown };
     if (!r.ok) {
       const d = data.detail;
       state.team.error =
@@ -1080,7 +876,7 @@ async function submitTeam(): Promise<void> {
       renderSync();
       return;
     }
-    state.team.result = data;
+    state.team.report = data;
     clearTeamDraft();
   } catch (e) {
     state.team.error = e instanceof Error ? e.message : String(e);
@@ -1090,116 +886,13 @@ async function submitTeam(): Promise<void> {
   renderSync();
 }
 
-async function submitTeamCompare(): Promise<void> {
-  readTeamForm();
-  state.team.error = null;
-  state.team.result = null;
-  state.team.compareResult = null;
-  state.team.compareLoading = true;
-  renderSync();
-
-  const members = state.team.members
-    .filter((m) => m.name.trim())
-    .map((m) => {
-      const timeline = (m.timeline || [])
-        .filter((row) => row.period_label.trim())
-        .map((row) => {
-          const n = parseFloat(row.activity_score.trim());
-          return Number.isFinite(n)
-            ? { period_label: row.period_label.trim(), activity_score: Math.min(100, Math.max(0, n)) }
-            : null;
-        })
-        .filter((x): x is { period_label: string; activity_score: number } => x !== null);
-      const oc = parseOptFloat(m.outcome_score);
-      return {
-        name: m.name.trim(),
-        role: m.role.trim(),
-        commits: parseOptInt(m.commits),
-        pull_requests: parseOptInt(m.pull_requests),
-        lines_changed: parseOptInt(m.lines_changed),
-        tasks_completed: parseOptInt(m.tasks_completed),
-        meetings_attended: parseOptInt(m.meetings_attended),
-        self_report: m.self_report,
-        peer_notes: m.peer_notes,
-        timeline,
-        ...(oc !== null ? { outcome_score: Math.min(100, Math.max(0, oc)) } : {}),
-      };
-    });
-
-  if (!state.team.project_name.trim() || members.length === 0) {
-    state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
-    state.team.compareLoading = false;
-    renderSync();
-    return;
-  }
-
-  let collaboration_edges: { source: string; target: string; weight: number }[] = [];
-  const rawEdges = state.team.collaboration_edges_json.trim();
-  if (rawEdges) {
-    try {
-      const parsed = JSON.parse(rawEdges) as unknown;
-      if (!Array.isArray(parsed)) throw new Error("not array");
-      collaboration_edges = parsed.map((e: unknown) => {
-        if (!e || typeof e !== "object") throw new Error("bad edge");
-        const o = e as Record<string, unknown>;
-        const w = typeof o.weight === "number" ? o.weight : parseFloat(String(o.weight ?? 5));
-        return {
-          source: String(o.source ?? "").trim(),
-          target: String(o.target ?? "").trim(),
-          weight: Number.isFinite(w) ? Math.min(100, Math.max(0, w)) : 5,
-        };
-      });
-    } catch {
-      state.team.error = "협업 네트워크 JSON 형식이 올바르지 않습니다.";
-      state.team.compareLoading = false;
-      renderSync();
-      return;
-    }
-  }
-
-  const body = {
-    project_name: state.team.project_name.trim(),
-    project_description: state.team.project_description,
-    evaluation_criteria: state.team.evaluation_criteria,
-    members,
-    collaboration_edges,
-  };
-
-  try {
-    const r = await apiFetch("/api/team/evaluate/compare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      timeoutMs: 300_000,
-    });
-    const data = (await r.json()) as TeamCompareResponse & { detail?: unknown };
-    if (!r.ok) {
-      const d = data.detail;
-      state.team.error =
-        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
-      state.team.compareLoading = false;
-      renderSync();
-      return;
-    }
-    state.team.compareResult = data;
-  } catch (e) {
-    state.team.error = e instanceof Error ? e.message : String(e);
-  } finally {
-    state.team.compareLoading = false;
-  }
-  renderSync();
-}
-
 function readAtRiskForm(): void {
   const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
   state.atRisk.course_name = g("ar_course")?.value ?? "";
   state.atRisk.student_label = g("ar_student")?.value ?? "";
+  state.atRisk.attendance_ratio = g("ar_attendance")?.value ?? "";
+  state.atRisk.assignment_ratio = g("ar_assignment")?.value ?? "";
   state.atRisk.notes = g("ar_notes")?.value ?? "";
-  state.atRisk.weeks = state.atRisk.weeks.map((_, i) => ({
-    week_label: g(`ar_week_${i}`)?.value ?? "",
-    engagement: g(`ar_eng_${i}`)?.value ?? "",
-    assessment_score: g(`ar_as_${i}`)?.value ?? "",
-  }));
 }
 
 async function submitAtRisk(): Promise<void> {
@@ -1209,27 +902,18 @@ async function submitAtRisk(): Promise<void> {
   state.atRisk.loading = true;
   renderSync();
 
-  const weeks = state.atRisk.weeks
-    .filter((w) => w.week_label.trim())
-    .map((w) => {
-      const eng = parseOptFloat(w.engagement);
-      if (eng === null) return null;
-      const row: { week_label: string; engagement: number; assessment_score?: number } = {
-        week_label: w.week_label.trim(),
-        engagement: eng,
-      };
-      const as = parseOptFloat(w.assessment_score);
-      if (as !== null) row.assessment_score = as;
-      return row;
-    })
-    .filter((x): x is NonNullable<typeof x> => x !== null);
-
-  if (weeks.length === 0) {
-    state.atRisk.error = "주차 라벨과 참여 점수(0–100)를 한 줄 이상 입력하세요.";
+  const att = parseOptFloat(state.atRisk.attendance_ratio);
+  const asg = parseOptFloat(state.atRisk.assignment_ratio);
+  if (att === null || asg === null) {
+    state.atRisk.error = "출석 비율과 과제 제출 비율(0–100)을 모두 입력하세요.";
     state.atRisk.loading = false;
     renderSync();
     return;
   }
+  const a = Math.min(100, Math.max(0, att));
+  const b = Math.min(100, Math.max(0, asg));
+  const engagement = (a + b) / 2;
+  const weeks = [{ week_label: "출석·과제", engagement }];
 
   const body = {
     course_name: state.atRisk.course_name.trim(),
@@ -1313,118 +997,6 @@ async function submitFeedback(): Promise<void> {
     state.feedback.error = e instanceof Error ? e.message : String(e);
   } finally {
     state.feedback.loading = false;
-  }
-  renderSync();
-}
-
-function readSyllabusForm(): void {
-  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
-  state.syllabus.course_name = g("sy_course")?.value ?? "";
-  state.syllabus.syllabus_text = g("sy_text")?.value ?? "";
-  state.syllabus.question = g("sy_q")?.value ?? "";
-}
-
-async function submitSyllabus(): Promise<void> {
-  readSyllabusForm();
-  state.syllabus.error = null;
-  state.syllabus.result = null;
-  state.syllabus.loading = true;
-  renderSync();
-
-  const text = state.syllabus.syllabus_text.trim();
-  const q = state.syllabus.question.trim();
-  if (text.length < 20 || q.length < 2) {
-    state.syllabus.error = "안내 문구는 20자 이상, 질문은 2자 이상 입력하세요.";
-    state.syllabus.loading = false;
-    renderSync();
-    return;
-  }
-
-  const body = {
-    course_name: state.syllabus.course_name.trim(),
-    syllabus_text: text,
-    question: q,
-  };
-
-  try {
-    const r = await apiFetch("/api/course/ask", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await r.json()) as CourseAskResponse & { detail?: unknown };
-    if (!r.ok) {
-      const d = data.detail;
-      state.syllabus.error =
-        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
-      state.syllabus.loading = false;
-      renderSync();
-      return;
-    }
-    state.syllabus.result = data;
-  } catch (e) {
-    state.syllabus.error = e instanceof Error ? e.message : String(e);
-  } finally {
-    state.syllabus.loading = false;
-  }
-  renderSync();
-}
-
-function readDiscussionForm(): void {
-  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
-  state.discussion.thread_title = g("disc_title")?.value ?? "";
-  state.discussion.posts = state.discussion.posts.map((_, i) => ({
-    author: g(`disc_author_${i}`)?.value ?? "",
-    text: g(`disc_text_${i}`)?.value ?? "",
-  }));
-}
-
-async function submitDiscussion(): Promise<void> {
-  readDiscussionForm();
-  state.discussion.error = null;
-  state.discussion.result = null;
-  state.discussion.loading = true;
-  renderSync();
-
-  const posts = state.discussion.posts
-    .filter((p) => p.text.trim())
-    .map((p) => ({
-      author_label: p.author.trim() || "익명",
-      text: p.text.trim(),
-    }));
-
-  if (posts.length === 0) {
-    state.discussion.error = "최소 한 게시글 본문을 입력하세요.";
-    state.discussion.loading = false;
-    renderSync();
-    return;
-  }
-
-  const body = {
-    thread_title: state.discussion.thread_title.trim(),
-    posts,
-  };
-
-  try {
-    const r = await apiFetch("/api/discussion/synthesize", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await r.json()) as DiscussionSynthesizeResponse & { detail?: unknown };
-    if (!r.ok) {
-      const d = data.detail;
-      state.discussion.error =
-        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
-      state.discussion.loading = false;
-      renderSync();
-      return;
-    }
-    state.discussion.result = data;
-  } catch (e) {
-    state.discussion.error = e instanceof Error ? e.message : String(e);
-  } finally {
-    state.discussion.loading = false;
   }
   renderSync();
 }
@@ -1538,58 +1110,6 @@ async function submitRubricAlign(): Promise<void> {
   renderSync();
 }
 
-function readLlmCompareForm(): void {
-  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
-  state.llmCompare.task_title = g("llm_task_title")?.value ?? "";
-  state.llmCompare.system_hint = g("llm_system_hint")?.value ?? "";
-  state.llmCompare.prompt = g("llm_prompt")?.value ?? "";
-}
-
-async function submitLlmCompare(): Promise<void> {
-  readLlmCompareForm();
-  state.llmCompare.error = null;
-  state.llmCompare.result = null;
-  state.llmCompare.loading = true;
-  renderSync();
-
-  const p = state.llmCompare.prompt.trim();
-  if (!p) {
-    state.llmCompare.error = "분석할 내용을 입력하세요.";
-    state.llmCompare.loading = false;
-    renderSync();
-    return;
-  }
-
-  const body = {
-    task_title: state.llmCompare.task_title.trim(),
-    system_hint: state.llmCompare.system_hint,
-    prompt: p,
-  };
-
-  try {
-    const r = await apiFetch("/api/llm/compare", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await r.json()) as LLMCompareResponse & { detail?: unknown };
-    if (!r.ok) {
-      const d = data.detail;
-      state.llmCompare.error =
-        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
-      state.llmCompare.loading = false;
-      renderSync();
-      return;
-    }
-    state.llmCompare.result = data;
-  } catch (e) {
-    state.llmCompare.error = e instanceof Error ? e.message : String(e);
-  } finally {
-    state.llmCompare.loading = false;
-  }
-  renderSync();
-}
-
 function connectionStripHtml(): string {
   const h = state.health;
   const docsHref = API_BASE ? `${API_BASE}/docs` : "/docs";
@@ -1635,10 +1155,10 @@ function navHtml(): string {
   return `
   <header class="site-header site-header--glass">
     <div class="nav-inner">
-      <a href="#" class="brand brand-mark" data-view="team" aria-label="팀 기여도 자동 평가">
+      <a href="#" class="brand brand-mark" data-view="team" aria-label="팀 프로젝트 기여도 평가">
         <span class="brand-glow" aria-hidden="true"></span>
-        <span class="brand-title">팀 기여도</span>
-        <span class="brand-tag">자동 평가 시스템 · AI</span>
+        <span class="brand-title">팀 공정 평가</span>
+        <span class="brand-tag">기여도 자동 산출</span>
       </a>
       <nav class="nav" aria-label="주요 메뉴">
         <button type="button" class="${cur("team")}" data-view="team">평가</button>
@@ -1674,63 +1194,45 @@ function hubHtml(): string {
     <section class="hero-block home-hero-main home-hero-visual">
       <div class="hero-orb hero-orb--a" aria-hidden="true"></div>
       <div class="hero-orb hero-orb--b" aria-hidden="true"></div>
-      <p class="eyebrow eyebrow--shine">부가 모듈</p>
-      <h1 class="home-headline home-headline--fx">교육 현장 보조 AI</h1>
+      <p class="eyebrow eyebrow--shine">팀 프로젝트 평가</p>
+      <h1 class="home-headline home-headline--fx">공정한 기여도, 한 화면에서</h1>
       <p class="hero-text home-lead">
-        본 서비스의 <strong>핵심은 상단 「평가」의 팀 기여도 자동 평가</strong>입니다. 아래는 같은 백엔드에 연결된 <strong>선택</strong> 도구입니다.
+        <strong>메인은 상단 「평가」의 자동 기여도 평가</strong>입니다. Git·PR·서술·팀 비교로 무임승차·불공정 문제를 줄이는 데 초점을 둡니다. 아래 네 가지는 같은 API에 연결된 <strong>보조</strong> 기능입니다.
       </p>
       <p class="muted small home-lead" style="margin-top:0.5rem;">
         로컬: 루트 <code>npm run dev</code> → API <code>8000</code> + 웹 <code>5173</code> · <code>/api</code> 프록시
       </p>
       <div class="pill-row hero-pills">${providerPills()}</div>
       <p class="row-actions" style="margin-top:1rem;">
-        <button type="button" class="btn btn-primary" data-view="team">팀 기여도 평가로 돌아가기</button>
+        <button type="button" class="btn btn-primary" data-view="team">메인 평가로 이동</button>
       </p>
     </section>
 
     <section class="section-block hud-section home-section">
-      <h2 class="section-title">부가 도구</h2>
+      <h2 class="section-title">보조 도구 (4가지)</h2>
       <div class="solution-grid">
         <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">다중 LLM</span>
+          <span class="solution-badge solution-badge--on">LMS·시험</span>
           <h3>과정 vs 시험 불일치</h3>
-          <p>LMS·과제 지표와 시험 점수를 넣어 부정행위 <em>의심도</em>·학습 상태·위험을 참고용으로 제시합니다.</p>
+          <p>과정 지표와 시험 점수를 넣어 불일치 방향·참고 요약을 봅니다.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="analyze">열기</button>
         </article>
         <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">4모델</span>
-          <h3>Gemini · ChatGPT · Claude · Grok</h3>
-          <p>같은 프롬프트로 네 AI에 동시에 질문하고 응답을 나란히 비교합니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="llm">열기</button>
-        </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">조기 경보</span>
+          <span class="solution-badge solution-badge--on">출석·과제</span>
           <h3>학습 이탈 신호</h3>
-          <p>주차별 참여 점수를 넣어 위험 지수·개입 제안 초안을 봅니다.</p>
+          <p>출석·과제 제출 비율만으로 <strong>정상 / 위험</strong>을 표시합니다.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="at-risk">열기</button>
         </article>
         <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">OpenAI</span>
+          <span class="solution-badge solution-badge--on">과제</span>
           <h3>과제 피드백 초안</h3>
-          <p>루브릭·제출물로 피드백 문단·강점·개선점 초안을 생성합니다. 교사 검수 후 전달하세요.</p>
+          <p>루브릭·제출물로 피드백 초안을 만듭니다. 교사 검수 후 전달하세요.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="feedback">열기</button>
         </article>
         <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">반복 질문</span>
-          <h3>강의 안내 Q&amp;A 초안</h3>
-          <p>실라버스·공지 일부와 학생 질문을 넣으면 안내 근거에 기반한 답변 초안·인용을 봅니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="syllabus">열기</button>
-        </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">대규모 토론</span>
-          <h3>토론 스레드 요약</h3>
-          <p>게시글을 붙여 넣으면 주제·참여 양상·후속 질문 초안을 정리합니다.</p>
-          <button type="button" class="btn btn-primary btn-block" data-view="discussion">열기</button>
-        </article>
-        <article class="solution-tile solution-tile--live hud-card">
-          <span class="solution-badge solution-badge--on">공정성</span>
-          <h3>루브릭 초안·채점 정합성</h3>
-          <p>학습 목표로 루브릭 초안을 만들거나, 기존 루브릭과 채점 코멘트의 일치를 점검합니다.</p>
+          <span class="solution-badge solution-badge--on">채점</span>
+          <h3>루브릭·정합성</h3>
+          <p>루브릭 초안 생성 또는 채점 코멘트와 루브릭의 일치를 점검합니다.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="rubric">열기</button>
         </article>
       </div>
@@ -1762,6 +1264,7 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
       <div><label class="lbl">변경 라인</label><input class="txt" id="tm_lines_${i}" type="number" min="0" value="${escapeHtml(m.lines_changed)}" /></div>
       <div><label class="lbl">완료 태스크</label><input class="txt" id="tm_tasks_${i}" type="number" min="0" value="${escapeHtml(m.tasks_completed)}" /></div>
       <div><label class="lbl">회의 출석</label><input class="txt" id="tm_meet_${i}" type="number" min="0" value="${escapeHtml(m.meetings_attended)}" /></div>
+      <div><label class="lbl">출석·참여 % (0–100)</label><input class="txt" id="tm_attendance_${i}" type="number" min="0" max="100" step="0.1" placeholder="비우면 회의 횟수×12.5%" value="${escapeHtml(m.attendance)}" /></div>
       <div><label class="lbl">결과 점수 (선택, 0–100)</label><input class="txt" id="tm_outcome_${i}" type="number" min="0" max="100" step="0.1" placeholder="발표·동료평가 등" value="${escapeHtml(m.outcome_score)}" /></div>
     </div>
     <details class="timeline-details">
@@ -1776,834 +1279,107 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
   </div>`;
 }
 
-function teamNetworkSvg(net: NetworkGraph | undefined, members?: TeamMemberOut[]): string {
-  if (!net?.nodes?.length) return "";
-  const iso = new Set<string>();
-  if (members) {
-    for (const m of members) {
-      const id = m.name?.trim();
-      if (!id) continue;
-      if (m.freerider_detection?.collaboration_isolated || m.freerider_detection?.rule_metrics?.interaction_risk) {
-        iso.add(id);
-      }
-    }
-  }
-  const maxCi = Math.max(...net.nodes.map((n) => n.contribution_index), 1);
-  const pos = new Map(net.nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
-  const W = 520;
-  const H = 480;
-  const edgeLines = (net.edges || [])
-    .map((e) => {
-      const a = pos.get(e.source);
-      const b = pos.get(e.target);
-      if (!a || !b) return "";
-      const sw = Math.max(0.6, Math.min(5, (e.weight / 100) * 5));
-      return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="rgba(37,99,235,0.35)" stroke-width="${sw}" />`;
-    })
-    .join("");
-  const circles = net.nodes
-    .map((n) => {
-      const lab = n.label || n.id;
-      const isHub = n.contribution_index >= maxCi * 0.92 && maxCi > 0;
-      const isolated = iso.has(n.id);
-      const r = isHub ? 24 : 20;
-      const fill = isolated ? "#fef2f2" : isHub ? "#eff6ff" : "#ffffff";
-      const stroke = isolated ? "#f87171" : isHub ? "#2563eb" : "#cbd5e1";
-      const sw = isolated || isHub ? 2.2 : 1.5;
-      const badge = isolated
-        ? `<text x="${n.x}" y="${n.y - r - 6}" text-anchor="middle" fill="#f87171" font-size="9" font-weight="700" font-family="system-ui,sans-serif">고립</text>`
-        : isHub
-          ? `<text x="${n.x}" y="${n.y - r - 6}" text-anchor="middle" fill="#2563eb" font-size="9" font-weight="700" font-family="system-ui,sans-serif">중심</text>`
-          : "";
-      return `<g class="${isolated ? "network-node--isolated" : ""} ${isHub ? "network-node--hub" : ""}">
-      ${badge}
-      <circle cx="${n.x}" cy="${n.y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" />
-      <text x="${n.x}" y="${n.y + 4}" text-anchor="middle" fill="#0f172a" font-size="10" font-family="system-ui,sans-serif">${escapeHtml(lab)}</text>
-      <text x="${n.x}" y="${n.y + (isHub ? 30 : 28)}" text-anchor="middle" fill="#64748b" font-size="8" font-family="system-ui,sans-serif">${n.contribution_index.toFixed(0)}</text>
-    </g>`;
-    })
-    .join("");
-  return `
-  <div class="network-chart-wrap hud-panel">
-    <h3 class="subh">협업 네트워크</h3>
-    <p class="muted small">노드=팀원, 선=협업 가중치. <strong>중심</strong>=기여 상위, <strong>고립</strong>=Rule 상호작용 의심. 간선 없으면 서버가 추정합니다.</p>
-    <svg class="network-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="협업 네트워크 그래프">
-      ${edgeLines}
-      ${circles}
-    </svg>
-  </div>`;
-}
-
-function teamTimelineSvg(members: TeamMemberOut[]): string {
-  const sample = members.find((m) => m.timeline && m.timeline.length);
-  if (!sample?.timeline?.length) return "";
-  const labels = sample.timeline.map((t) => t.period_label);
-  const n = members.length;
-  const k = labels.length;
-  const W = 560;
-  const H = 240;
-  const padL = 44;
-  const padR = 12;
-  const padT = 14;
-  const padB = 40;
-  const chartW = W - padL - padR;
-  const chartH = H - padT - padB;
-  const colors = ["#2563eb", "#7c3aed", "#059669", "#d97706", "#0891b2", "#dc2626"];
-  let maxY = 40;
-  for (const m of members) {
-    for (const p of m.timeline || []) {
-      maxY = Math.max(maxY, p.share_percent);
-    }
-  }
-  maxY = Math.min(100, Math.ceil(maxY / 10) * 10 + 5);
-
-  const lines: string[] = [];
-  for (let mi = 0; mi < n; mi++) {
-    const tl = members[mi].timeline || [];
-    if (tl.length === 0) continue;
-    const color = colors[mi % colors.length];
-    const coords = tl.map((p, t) => {
-      const x = k === 1 ? padL + chartW / 2 : padL + (t / Math.max(1, k - 1)) * chartW;
-      const y = padT + chartH - (p.share_percent / maxY) * chartH;
-      return `${x},${y}`;
-    });
-    if (coords.length === 1) {
-      const [cx, cy] = coords[0].split(",").map(Number);
-      lines.push(`<circle cx="${cx}" cy="${cy}" r="5" fill="${color}" />`);
-    } else {
-      lines.push(
-        `<polyline fill="none" stroke="${color}" stroke-width="2.5" points="${coords.join(" ")}" />`
-      );
-    }
-  }
-
-  const xLabels = labels
-    .map((lab, t) => {
-      const x = k === 1 ? padL + chartW / 2 : padL + (t / Math.max(1, k - 1)) * chartW;
-      return `<text x="${x}" y="${H - 12}" text-anchor="middle" fill="#64748b" font-size="10" font-family="system-ui,sans-serif">${escapeHtml(lab)}</text>`;
-    })
-    .join("");
-
-  const legend = members
-    .map(
-      (m, i) =>
-        `<span class="timeline-legend-item" style="color:${colors[i % colors.length]}">● ${escapeHtml(m.name)}</span>`
-    )
-    .join(" ");
-
-  return `
-  <div class="timeline-chart-wrap hud-panel">
-    <h3 class="subh">프로젝트 기간별 기여 비중 (%)</h3>
-    <p class="muted small">초반·후반 누가 얼마나 기여했는지 한눈에 봅니다.</p>
-    <p class="muted small legend-line">${legend}</p>
-    <svg class="timeline-chart" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" aria-label="기여도 타임라인">
-      <rect x="${padL}" y="${padT}" width="${chartW}" height="${chartH}" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1" rx="2"/>
-      ${lines.join("")}
-      ${xLabels}
-    </svg>
-  </div>`;
-}
-
-function normNums(vals: number[]): number[] {
-  const s = vals.reduce((a, b) => a + b, 0) || 1;
-  return vals.map((v) => v / s);
-}
-
-/** 백엔드 `_heuristic`과 동일한 가중(커밋·태스크·라인·PR·자기서술 분량). */
-function heuristicContributionIndicesFromRows(members: TeamMemberRow[]): number[] {
-  const n = members.length;
-  if (n === 0) return [];
-  const parseN = (s: string) => {
-    const x = parseFloat(String(s).trim());
-    return Number.isFinite(x) && x >= 0 ? x : 0;
-  };
-  const commits = members.map((m) => parseN(m.commits));
-  const tasks = members.map((m) => parseN(m.tasks_completed));
-  const lines = members.map((m) => parseN(m.lines_changed));
-  const prs = members.map((m) => parseN(m.pull_requests));
-  const words = members.map((m) =>
-    Math.max(0, (m.self_report || "").trim().split(/\s+/).filter(Boolean).length)
-  );
-  const nc = normNums(commits);
-  const nt = normNums(tasks);
-  const nl = normNums(lines);
-  const npr = normNums(prs);
-  const nw = normNums(words.map((w) => w));
-  const raw = members.map(
-    (_, i) => 0.22 * nc[i] + 0.18 * nt[i] + 0.18 * nl[i] + 0.12 * npr[i] + 0.3 * nw[i]
-  );
-  const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
-  return raw.map((x) => Math.round((10000 * x) / rawSum) / 100);
-}
-
-function simulateExtraCommits(members: TeamMemberRow[], memberIdx: number, extra: number): number[] {
-  const parseN = (s: string) => {
-    const x = parseFloat(String(s).trim());
-    return Number.isFinite(x) && x >= 0 ? x : 0;
-  };
-  const copy = members.map((m, i) =>
-    i === memberIdx ? { ...m, commits: String(parseN(m.commits) + extra) } : m
-  );
-  return heuristicContributionIndicesFromRows(copy);
-}
-
-function teamRoleRadarSvg(b: TeamRoleBalance): string {
-  const vals = [b.dev, b.doc, b.leader, b.supporter];
-  const labels = ["개발", "문서", "리더", "서포터"];
-  const cx = 100;
-  const cy = 100;
-  const rmax = 78;
-  const n = 4;
-  const grid = [0.25, 0.5, 0.75, 1].map(
-    (t) =>
-      `<circle cx="${cx}" cy="${cy}" r="${rmax * t}" fill="none" stroke="#2a3547" stroke-width="1" />`
-  );
-  const axes = labels
-    .map((lab, i) => {
-      const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
-      const x2 = cx + rmax * Math.cos(ang);
-      const y2 = cy + rmax * Math.sin(ang);
-      const lx = cx + (rmax + 14) * Math.cos(ang);
-      const ly = cy + (rmax + 14) * Math.sin(ang);
-      return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#cbd5e1" stroke-width="1" /><text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" fill="#475569" font-size="10" font-family="system-ui,sans-serif">${lab}</text>`;
-    })
-    .join("");
-  const pts = vals.map((v, i) => {
-    const ang = -Math.PI / 2 + (2 * Math.PI * i) / n;
-    const rr = (Math.min(100, Math.max(0, v)) / 100) * rmax;
-    return [cx + rr * Math.cos(ang), cy + rr * Math.sin(ang)];
-  });
-  const pathD =
-    pts.map((p, i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ") + " Z";
-  return `<svg class="radar-svg" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" aria-label="팀 평균 역할 밸런스">
-    ${grid.join("")}
-    ${axes}
-    <path d="${pathD}" fill="rgba(91,143,255,0.2)" stroke="#5b8fff" stroke-width="2" />
-  </svg>`;
-}
-
-function teamPracticalPanelHtml(res: TeamEvaluateResponse): string {
-  const p = res.practical_toolkit;
-  if (!p?.teacher_checklist?.length) return "";
-  const items = p.teacher_checklist.map((i) => `<li>${escapeHtml(i)}</li>`).join("");
-  return `
-  <section class="practical-panel hud-panel" aria-labelledby="practical-heading">
-    <h3 class="subh" id="practical-heading">교육자 실무 체크리스트</h3>
-    <p class="muted small practical-note">${escapeHtml(p.checklist_note || "")}</p>
-    <ul class="practical-checklist">${items}</ul>
-  </section>`;
-}
-
-function teamCreativePanelHtml(res: TeamEvaluateResponse): string {
-  const c = res.creative_insights;
-  if (!c) return "";
-  const rk = c.reflection_kit;
-  const hs = c.team_health_score;
-  const healthBlock =
-    hs != null
-      ? `<div class="team-health-meter" role="group" aria-label="팀 협업 건강도 참고">
-    <div class="team-health-top">
-      <span class="team-health-label">팀 협업 건강도 (참고)</span>
-      <span class="team-health-num">${hs.toFixed(1)}<span class="team-health-max">/100</span></span>
-    </div>
-    <div class="health-bar-wrap" aria-hidden="true"><div class="health-bar-fill" style="width:${Math.min(100, Math.max(0, hs))}%"></div></div>
-    <p class="muted small team-health-hint">${escapeHtml(c.team_health_hint || "")}</p>
-  </div>`
-      : "";
-  const factsHtml = (c.explain_facts || [])
-    .map(
-      (x) => `
-    <article class="fact-card">
-      <h5 class="fact-card-title">${escapeHtml(x.member_name)}</h5>
-      <ul class="fact-card-ul">${(x.facts || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
-    </article>`
-    )
-    .join("");
-  return `
-  <section class="creative-panel hud-panel" aria-labelledby="creative-heading">
-    <h3 class="subh" id="creative-heading">창의 인사이트 · 설명 가능성 · 면담 키트</h3>
-    <p class="muted small creative-lead">규칙 기반 자동 생성입니다. 징계·단정용이 아니라 <strong>교육·성찰·면담 준비</strong>용입니다.</p>
-    ${healthBlock}
-    <div class="creative-grid">
-      <div class="creative-col creative-col--story">
-        <h4 class="creative-h4">팀 스토리라인</h4>
-        <p class="prose creative-story">${escapeHtml(rk.team_storyline)}</p>
-        <p class="creative-encourage">${escapeHtml(rk.encouragement_line)}</p>
-      </div>
-      <div class="creative-col creative-col--radar">
-        <h4 class="creative-h4">팀 역할 밸런스 (평균)</h4>
-        ${teamRoleRadarSvg(c.team_role_balance)}
-        <p class="muted small">${escapeHtml(c.team_role_balance.balance_hint)}</p>
-      </div>
-      <div class="creative-col creative-col--questions">
-        <h4 class="creative-h4">교육자용 질문</h4>
-        <ol class="reflection-ol">${(rk.teacher_questions || []).map((q) => `<li>${escapeHtml(q)}</li>`).join("")}</ol>
-      </div>
-    </div>
-    <details class="creative-details">
-      <summary>팀원별 규칙 기반 설명 카드</summary>
-      <div class="fact-card-grid">${factsHtml}</div>
-    </details>
-  </section>`;
-}
-
-function teamSimulatorHtml(): string {
-  const members = state.team.members.filter((m) => m.name.trim());
-  const opts = members
-    .map((m, i) => `<option value="${i}">${escapeHtml(m.name)}</option>`)
-    .join("");
-  return `
-  <section class="creative-sim hud-panel no-print" aria-labelledby="sim-heading">
-    <h3 class="subh" id="sim-heading">가상 시뮬레이터 (교육용)</h3>
-    <p class="muted small">휴리스틱 평가와 동일한 가중으로, 선택한 팀원의 <strong>커밋 수만</strong> 가상 증가시켰을 때의 기여 지수 변화를 보여 줍니다. 실제 서버 재요청이 아닙니다.</p>
-    <div class="grid-2 sim-controls">
-      <div>
-        <label class="lbl" for="team-sim-member">팀원</label>
-        <select class="txt" id="team-sim-member">${opts || '<option value="0">—</option>'}</select>
-      </div>
-      <div>
-        <label class="lbl" for="team-sim-extra">가상 추가 커밋: <span id="team-sim-extra-lbl">0</span></label>
-        <input type="range" class="sim-range" id="team-sim-extra" min="0" max="40" value="0" />
-      </div>
-    </div>
-    <div id="team-sim-output" class="sim-output" aria-live="polite"></div>
-  </section>`;
-}
-
-/** 슬라이더·셀렉트 입력을 rAF로 합쳐 레이아웃 부담 완화 */
-function updateTeamSimDisplay(): void {
-  if (teamSimRafId) return;
-  teamSimRafId = requestAnimationFrame(() => {
-    teamSimRafId = 0;
-    updateTeamSimDisplayImpl();
-  });
-}
-
-function updateTeamSimDisplayImpl(): void {
-  readTeamForm();
-  const sel = document.getElementById("team-sim-member") as HTMLSelectElement | null;
-  const range = document.getElementById("team-sim-extra") as HTMLInputElement | null;
-  const lbl = document.getElementById("team-sim-extra-lbl");
-  const out = document.getElementById("team-sim-output");
-  if (!sel || !range || !out) return;
-  const extra = parseInt(range.value, 10) || 0;
-  if (lbl) lbl.textContent = String(extra);
-  const members = state.team.members.filter((m) => m.name.trim());
-  if (members.length === 0) {
-    out.innerHTML = '<p class="muted small">이름이 입력된 팀원이 없습니다.</p>';
-    return;
-  }
-  let idx = parseInt(sel.value, 10);
-  if (!Number.isFinite(idx) || idx < 0 || idx >= members.length) idx = 0;
-  const base = heuristicContributionIndicesFromRows(members);
-  const sim = simulateExtraCommits(members, idx, extra);
-  const rows = members
-    .map((m, i) => {
-      const d = sim[i] - base[i];
-      const delta = d === 0 ? "±0.0" : d > 0 ? `+${d.toFixed(1)}` : d.toFixed(1);
-      return `<tr><td>${escapeHtml(m.name)}</td><td>${base[i].toFixed(1)}</td><td>${sim[i].toFixed(1)}</td><td class="sim-delta">${delta}</td></tr>`;
-    })
-    .join("");
-  out.innerHTML = `<div class="table-scroll-wrap"><table class="data-table data-table--sim"><thead><tr><th>이름</th><th>현재(추정)</th><th>시뮬</th><th>Δ</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-}
-
-function pipelineStatusLabel(status: string): string {
-  if (status === "completed") return "완료";
-  if (status === "partial") return "일부";
-  if (status === "skipped") return "생략";
-  return status;
-}
-
-function teamComparePanelHtml(): string {
-  const c = state.team.compareResult;
-  if (!c) return "";
-  const modeBadge =
-    c.product_mode === "ai_multi_eval" ? ` <span class="pill pill-on">AI 멀티평가</span>` : "";
-  const pipelineBlock = (() => {
-    const steps = c.pipeline_steps;
-    if (!steps?.length) return "";
-    const items = steps
-      .map((s) => {
-        const cls =
-          s.status === "completed"
-            ? "eval-pipeline__item--done"
-            : s.status === "partial"
-              ? "eval-pipeline__item--partial"
-              : "eval-pipeline__item--skip";
-        return `<li class="eval-pipeline__item ${cls}">
-          <div class="eval-pipeline__head">
-            <span class="eval-pipeline__n">STEP ${s.step}</span>
-            <span class="eval-pipeline__title">${escapeHtml(s.title_ko)}</span>
-            <span class="eval-pipeline__badge">${escapeHtml(pipelineStatusLabel(s.status))}</span>
-          </div>
-          ${s.detail ? `<p class="eval-pipeline__detail muted small">${escapeHtml(s.detail)}</p>` : ""}
-        </li>`;
-      })
-      .join("");
-    return `<div class="hud-panel eval-pipeline-wrap">
-      <h3 class="subh">처리 파이프라인 (STEP 1–6)</h3>
-      <ol class="eval-pipeline">${items}</ol>
-    </div>`;
-  })();
-  const modelPills = c.models
-    .map((b) => {
-      const err = b.ok ? "" : ` <span class="muted small">(${escapeHtml(b.error || "")})</span>`;
-      return `<span class="pill ${b.ok ? "pill-on" : "pill-off"}">${escapeHtml(b.key)} · ${escapeHtml(b.label)}</span>${err}`;
-    })
-    .join(" ");
-
-  const divergenceBlock = (() => {
-    const d = c.divergence;
-    if (!d?.primary_axes?.length) return "";
-    const axRows = d.primary_axes
-      .map(
-        (a) =>
-          `<tr><td>${escapeHtml(a.axis_label_ko)}</td><td>${a.mean_spread.toFixed(2)}</td><td>${escapeHtml(a.max_spread_member || "—")}</td><td class="muted small">${escapeHtml(a.interpretation)}</td></tr>`
-      )
-      .join("");
-    const crit =
-      d.criteria_segments?.length > 0
-        ? `<ul class="criteria-list muted small">${d.criteria_segments.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`
-        : "";
-    return `
-    <div class="hud-panel team-compare-div">
-      <h3 class="subh">STEP 4 · AI 간 차이 분석</h3>
-      ${d.narrative ? `<p class="prose">${escapeHtml(d.narrative)}</p>` : ""}
-      ${d.criteria_keyword_overlap_note ? `<p class="muted small">${escapeHtml(d.criteria_keyword_overlap_note)}</p>` : ""}
-      ${crit ? `<p class="muted small">입력 평가 기준(발췌)</p>${crit}` : ""}
-      <div class="table-scroll-wrap">
-      <table class="data-table data-table--compact">
-        <thead><tr><th>축</th><th>평균 편차</th><th>편차 최대 팀원</th><th>해석</th></tr></thead>
-        <tbody>${axRows}</tbody>
-      </table></div>
-    </div>`;
-  })();
-
-  const trustBlock = (() => {
-    const t = c.trust_scores;
-    if (!t) return "";
-    const noteList = (t.notes || []).map((n) => `<li>${escapeHtml(n)}</li>`).join("");
-    return `
-    <div class="hud-panel team-compare-trust">
-      <h3 class="subh">STEP 5 · 신뢰도 계산 (0–100)</h3>
-      <div class="trust-score-grid">
-        <div><span class="trust-label">일관성</span> <strong>${t.consistency_0_100.toFixed(1)}</strong></div>
-        <div><span class="trust-label">루브릭 일치</span> <strong>${t.rubric_alignment_0_100.toFixed(1)}</strong></div>
-        <div><span class="trust-label">설명 품질</span> <strong>${t.explanation_quality_0_100.toFixed(1)}</strong></div>
-        <div><span class="trust-label">종합</span> <strong>${t.overall_trust_0_100.toFixed(1)}</strong></div>
-      </div>
-      ${noteList ? `<ul class="muted small">${noteList}</ul>` : ""}
-    </div>`;
-  })();
-
-  const explainBlock = (() => {
-    const ex = c.explainability;
-    if (!ex?.length) return "";
-    const cards = ex
-      .map(
-        (e) => `
-      <article class="explain-card hud-panel">
-        <h4 class="explain-card__title">${escapeHtml(e.model_label)} · ${escapeHtml(e.member_name)}</h4>
-        <p class="muted small">기여 ${e.contribution_index.toFixed(1)} · 기술 ${e.technical.toFixed(0)} · 협업 ${e.collaboration.toFixed(0)} · 주도 ${e.initiative.toFixed(0)}</p>
-        <p class="prose">${escapeHtml(e.why_one_liner)}</p>
-        ${e.evidence_summary ? `<p class="prose small"><strong>근거</strong> ${escapeHtml(e.evidence_summary)}</p>` : ""}
-        ${e.caveats ? `<p class="muted small"><strong>주의</strong> ${escapeHtml(e.caveats)}</p>` : ""}
-      </article>`
-      )
-      .join("");
-    return `
-    <div class="team-compare-explain">
-      <h3 class="subh">STEP 6 · 모델별 근거·피드백 (Explainable AI)</h3>
-      <div class="explain-grid">${cards}</div>
-    </div>`;
-  })();
-
-  const keys = [...new Set(c.member_comparison.flatMap((m) => Object.keys(m.contribution_index_by_model)))];
-  if (!keys.length) {
-    return `
-  <section class="panel panel-result hud-panel team-compare-panel">
-    <h2>AI 멀티평가${modeBadge}</h2>
-    ${pipelineBlock}
-    <p class="muted small">${escapeHtml(c.comparison_summary)}</p>
-    <div class="pill-row">${modelPills}</div>
-    <p class="err">비교할 수 있는 모델 결과가 없습니다. backend/.env 에 각 제공자 API 키를 넣었는지 확인하세요.</p>
-    ${divergenceBlock}
-    ${trustBlock}
-    ${explainBlock}
-    <p class="footer-note muted small">${escapeHtml(c.disclaimer || "")}</p>
-  </section>`;
-  }
-  const th = keys.map((k) => `<th>${escapeHtml(k)}</th>`).join("");
-  const trs = c.member_comparison
-    .map((m) => {
-      const tds = keys
-        .map((k) => {
-          const v = m.contribution_index_by_model[k];
-          return `<td>${v !== undefined ? v.toFixed(1) : "—"}</td>`;
-        })
-        .join("");
-      return `<tr><td>${escapeHtml(m.member_name)}</td>${tds}<td>${m.spread.toFixed(2)}</td><td>${m.mean.toFixed(1)}</td></tr>`;
-    })
-    .join("");
-  const meta = [c.request_id ? `요청 ${escapeHtml(c.request_id)}` : "", c.processing_ms != null ? `${c.processing_ms.toFixed(0)} ms` : ""]
+function teamReportHtml(): string {
+  const rep = state.team.report;
+  if (!rep) return "";
+  const n = rep.scores.length || 1;
+  const log = rep.evaluation_log as { request_id?: string; timestamp?: string };
+  const meta = [log.request_id ? `요청 ${escapeHtml(log.request_id)}` : "", log.timestamp ? escapeHtml(log.timestamp) : ""]
     .filter(Boolean)
     .join(" · ");
-  return `
-  <section class="panel panel-result hud-panel team-compare-panel">
-    <h2>AI 멀티평가${modeBadge}</h2>
-    ${pipelineBlock}
-    <p class="muted small">${escapeHtml(c.comparison_summary)}</p>
-    ${meta ? `<p class="muted small">${meta}</p>` : ""}
-    <p class="muted small step-inline-hint"><strong>STEP 2</strong> · 연동 모델</p>
-    <div class="pill-row">${modelPills}</div>
-    <p class="muted small step-inline-hint"><strong>STEP 3</strong> · 루브릭(평가 기준)에 따라 각 모델이 차원·기여 점수를 산출합니다.</p>
-    ${divergenceBlock}
-    ${trustBlock}
-    <h3 class="subh">STEP 6 · 최종 점수 (모델별 기여 지수 비교)</h3>
-    <div class="table-scroll-wrap">
-      <table class="data-table">
-        <thead><tr><th>팀원</th>${th}<th>편차</th><th>평균</th></tr></thead>
-        <tbody>${trs}</tbody>
-      </table>
-    </div>
-    ${explainBlock}
-    <p class="footer-note muted small">${escapeHtml(c.disclaimer || "")}</p>
-  </section>`;
-}
-
-function teamDashboardBarHtml(res: TeamEvaluateResponse): string {
-  const tag = res.product_tagline_ko?.trim();
-  const dash = res.team_dashboard;
-  if (!tag && !(dash && dash.length)) return "";
-  const tagBlock = tag
-    ? `<div class="product-tagline hud-panel"><p class="prose tagline-prose">${escapeHtml(tag)}</p></div>`
+  const edgeCases = (rep.edge_cases || []).length
+    ? `<div class="hud-panel"><h3 class="subh">엣지 케이스</h3><ul>${rep.edge_cases.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul></div>`
     : "";
-  const bars = (dash || [])
-    .map((row) => {
-      const warn = row.suspected_highlight
-        ? ` <span class="dash-warn" title="Rule 기준 의심·저점">⚠️</span>`
-        : "";
-      const risk =
-        row.risk_level === "suspected"
-          ? `<span class="pill pill-warn pill-sm">위험</span>`
-          : row.risk_level === "caution"
-            ? `<span class="pill pill-muted pill-sm">주의</span>`
-            : `<span class="pill pill-on pill-sm">정상</span>`;
-      return `<div class="dash-row">
-      <div class="dash-rank">#${row.rank}</div>
-      <div class="dash-name">${escapeHtml(row.member_name)}${warn}</div>
-      <div class="dash-bar-wrap" role="img" aria-label="기여 점수 막대">
-        <div class="dash-bar-fill" style="width:${Math.min(100, row.bar_fill_percent)}%"></div>
+  const scoreSections = rep.scores
+    .map((s) => {
+      const an = rep.analysis.find((x) => x.member_name === s.member_name);
+      const am = rep.anomalies.find((x) => x.member_name === s.member_name);
+      const trust = rep.trust_scores[s.member_name];
+      const b = s.breakdown;
+      const p = s.weighted_points;
+      const rel = s.data_reliability;
+      const flags = (am?.flags || []).length
+        ? `<ul class="report-flags">${(am?.flags || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>`
+        : `<p class="muted small">없음</p>`;
+      const strengths = (an?.strengths || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+      const weaknesses = (an?.weaknesses || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+      const rec = (an?.recommended_actions || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
+      return `
+  <article class="report-member-flow hud-panel">
+    <header class="report-member-head">
+      <h3 class="subh">${escapeHtml(s.member_name)}</h3>
+      <p class="report-summary-line"><strong>기여도(정규화)</strong> ${s.normalizedScore.toFixed(0)}점 · <strong>순위</strong> ${s.rank}/${n} (상위 ${s.top_percent.toFixed(1)}%)</p>
+      <p class="muted small">팀 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%</p>
+      ${trust != null ? `<p class="report-trust"><strong>데이터 신뢰도</strong> <span class="score-num">${trust.toFixed(0)}</span>% <span class="muted small">(Git ${rel.git_ratio_percent.toFixed(0)}% / 자기서술 ${rel.self_report_ratio_percent.toFixed(0)}%)</span></p>` : ""}
+      ${rel.note ? `<p class="muted small">⚠️ ${escapeHtml(rel.note)}</p>` : ""}
+    </header>
+    <section class="report-section">
+      <h4 class="report-h4">점수 근거 (Score Engine)</h4>
+      <ul class="report-breakdown">
+        <li>커밋: ${p.commits.toFixed(2)}점 (기준값 ${b.commits.toFixed(1)})</li>
+        <li>PR: ${p.prs.toFixed(2)}점 (기준값 ${b.prs.toFixed(1)})</li>
+        <li>코드라인: ${p.lines.toFixed(2)}점 (기준값 ${b.lines.toFixed(1)})</li>
+        <li>출석: ${p.attendance.toFixed(2)}점 (기준값 ${b.attendance.toFixed(1)})</li>
+        <li>자기서술: ${p.self_report.toFixed(2)}점 (기준값 ${b.self_report.toFixed(1)})</li>
+      </ul>
+      <p class="muted small">환산 raw ${s.rawScore.toFixed(2)}</p>
+    </section>
+    <section class="report-section">
+      <h4 class="report-h4">이상 감지 (규칙)</h4>
+      ${flags}
+    </section>
+    <section class="report-section report-ai">
+      <h4 class="report-h4">AI 분석 (설명)</h4>
+      <p class="prose">${escapeHtml(an?.summary || "")}</p>
+      <p class="muted small">${escapeHtml(an?.position_in_team || "")}</p>
+      <div class="grid-2 report-strength-weak">
+        <div><strong>강점</strong><ul>${strengths}</ul></div>
+        <div><strong>개선</strong><ul>${weaknesses}</ul></div>
       </div>
-      <div class="dash-score">${row.final_rule_score.toFixed(1)}</div>
-      <div class="dash-grade">${escapeHtml(row.grade_ko)}</div>
-      <div class="dash-risk">${risk} <span class="muted small">${row.rule_conditions_met}조건</span></div>
-    </div>`;
-    })
-    .join("");
-  const dashBlock =
-    dash && dash.length
-      ? `<div class="team-dash hud-panel">
-      <h3 class="subh">팀 기여 대시보드</h3>
-      <p class="muted small">막대·순위 = Rule 혼합(활동×0.4+협업×0.3+시간×0.3), <strong>코드·데이터 산출</strong>. 3지표 이상 위험 시 페널티(×0.6).</p>
-      <div class="dash-head"><span>순위</span><span>이름</span><span>막대</span><span>점수</span><span>등급</span><span>판정</span></div>
-      ${bars}
-    </div>`
-      : "";
-  return `${tagBlock}${dashBlock}`;
-}
-
-function teamContestUpgradeHtml(res: TeamEvaluateResponse): string {
-  const rub = res.rubric_report;
-  const tr = res.evaluation_trust;
-  const risk = res.team_risk;
-  const chain = res.improvement_chain;
-  const rubRows = (rub?.members || [])
-    .map(
-      (r) => `<tr>
-      <td>${escapeHtml(r.member_name)}</td>
-      <td>${r.contribution.toFixed(0)}</td>
-      <td>${r.collaboration.toFixed(0)}</td>
-      <td>${r.persistence.toFixed(0)}</td>
-      <td>${r.problem_solving.toFixed(0)}</td>
-    </tr>`
-    )
-    .join("");
-  const ta = rub?.team_average;
-  const rubTable =
-    rubRows || ta
-      ? `<div class="contest-block hud-panel">
-      <h3 class="subh">루브릭 4축 (규칙·데이터)</h3>
-      <p class="muted small">${escapeHtml(rub?.criteria_note || "")}</p>
-      <table class="data-table contest-rubric-table">
-        <thead><tr><th>이름</th><th>기여도</th><th>협업 참여</th><th>지속성</th><th>문제 해결 기여</th></tr></thead>
-        <tbody>${rubRows}</tbody>
-        ${
-          ta
-            ? `<tfoot><tr><td><strong>${escapeHtml(ta.member_name)}</strong></td>
-          <td>${ta.contribution.toFixed(0)}</td><td>${ta.collaboration.toFixed(0)}</td>
-          <td>${ta.persistence.toFixed(0)}</td><td>${ta.problem_solving.toFixed(0)}</td></tr></tfoot>`
-            : ""
-        }
-      </table>
-    </div>`
-      : "";
-  const trustPill =
-    tr && tr.score_0_100 != null
-      ? `<div class="contest-block hud-panel contest-trust">
-      <h3 class="subh">평가 신뢰도</h3>
-      <p><span class="pill ${tr.level_ko === "높음" ? "pill-on" : tr.level_ko === "중간" ? "pill-muted" : "pill-warn"}">신뢰도: ${escapeHtml(tr.level_ko || "—")}</span>
-      <strong class="trust-score">${tr.score_0_100.toFixed(0)}</strong><span class="muted small">/100</span></p>
-      <p class="muted small">${escapeHtml(tr.short_note || "")}</p>
-      <ul class="fr-ul">${(tr.factors || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
-    </div>`
-      : "";
-  const riskBlock =
-    risk && (risk.flags?.length || risk.summary_ko)
-      ? `<div class="contest-block hud-panel">
-      <h3 class="subh">팀 리스크 (전체)</h3>
-      <p class="prose small">${escapeHtml(risk.summary_ko || "")}</p>
-      <ul class="fr-ul">${(risk.flags || []).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>
-    </div>`
-      : "";
-  const chainItems = (chain?.items || [])
-    .map(
-      (it) => `<article class="chain-item hud-panel">
-      <p><strong>문제</strong> ${escapeHtml(it.problem || "")}</p>
-      <p class="muted small"><strong>설명</strong> ${escapeHtml(it.explanation || "")}</p>
-      <p><strong>개선</strong> ${escapeHtml(it.suggestion || "")}</p>
-      <p class="muted small"><strong>기대</strong> ${escapeHtml(it.predicted_outcome || "")}</p>
-    </article>`
-    )
-    .join("");
-  const chainBlock = chainItems
-    ? `<div class="contest-chain-wrap hud-panel">
-      <h3 class="subh">${escapeHtml(chain?.headline || "설명 → 개선 → 기대 효과")}</h3>
-      <div class="chain-grid">${chainItems}</div>
-    </div>`
-    : "";
-  if (!rubTable && !trustPill && !riskBlock && !chainBlock) return "";
-  return `<section class="contest-upgrade" aria-label="수상권 강화 블록">${rubTable}${trustPill}${riskBlock}${chainBlock}</section>`;
-}
-
-function teamFreeriderPanelHtml(res: TeamEvaluateResponse): string {
-  const ov = res.freerider_detection_overview?.trim();
-  if (!ov && !(res.members || []).some((m) => m.freerider_detection)) return "";
-  const cards = (res.members || [])
-    .map((m) => {
-      const fr = m.freerider_detection;
-      if (!fr) return "";
-      const rm = fr.rule_metrics;
-      const ruleBlock =
-        rm && (rm.final_score != null || rm.grade_ko)
-          ? `<div class="fr-layer fr-rule">
-        <strong>Rule 혼합</strong>
-        <p class="muted small">점수 = 활동×0.4 + 협업×0.3 + 시간×0.3 → <strong>${(rm.blended_score ?? 0).toFixed(1)}</strong>${rm.penalty_applied ? ` → 페널티 적용 <strong>${(rm.final_score ?? 0).toFixed(1)}</strong> (×0.6)` : ` → 최종 <strong>${(rm.final_score ?? 0).toFixed(1)}</strong>`}</p>
-        <p class="muted small">활동 ${(rm.activity_score ?? 0).toFixed(1)} · 협업 ${(rm.collaboration_score ?? 0).toFixed(1)} · 시간 ${(rm.consistency_score ?? 0).toFixed(1)} · 4지표 중 ${rm.rule_conditions_met ?? 0}개 위험</p>
-        <p><span class="fr-badge fr-badge--grade">${escapeHtml(rm.grade_ko || "")}</span> · ${escapeHtml(rm.risk_level === "suspected" ? "의심(3+)" : rm.risk_level === "caution" ? "주의(2)" : "정상(≤1)")}</p>
-        <ul class="fr-ul">${(rm.analysis_lines || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
-      </div>`
-          : "";
-      const b1 = fr.basic_low_contribution
-        ? `<span class="fr-badge fr-badge--basic">Low Contribution</span>`
-        : `<span class="muted small">1차 해당 없음</span>`;
-      const b3 = fr.collaboration_isolated
-        ? `<span class="fr-badge fr-badge--iso">협업 고립 사용자</span>`
-        : `<span class="muted small">3차 해당 없음</span>`;
-      const b4 = fr.below_team_average
-        ? `<span class="fr-badge fr-badge--avg">팀 평균 대비 낮음</span>`
-        : `<span class="muted small">4차 해당 없음</span>`;
-      const advList = (fr.advanced_pattern_flags || []).length
-        ? `<ul class="fr-ul">${(fr.advanced_pattern_flags || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>`
-        : `<p class="muted small">2차 비정상 패턴 신호 없음</p>`;
-      const ai = fr.ai_detection_summary?.trim()
-        ? `<div class="fr-layer fr-ai"><strong>AI 설명</strong> <span class="muted small">(탐지·점수는 Rule·데이터)</span><p class="prose small">${escapeHtml(fr.ai_detection_summary || "")}</p></div>`
-        : "";
-      return `
-    <article class="fr-card hud-panel">
-      <h4>${escapeHtml(m.name)}</h4>
-      ${ruleBlock}
-      <div class="fr-layer"><strong>1️⃣ 기본 탐지</strong> ${b1}<ul class="fr-ul">${(fr.basic_reasons || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>
-      <div class="fr-layer"><strong>2️⃣ 고급 패턴</strong> <span class="muted small">패턴 점수 ${(fr.advanced_pattern_score ?? 0).toFixed(1)}</span>${advList}</div>
-      <div class="fr-layer"><strong>3️⃣ 협업 고립</strong> ${b3}<ul class="fr-ul">${(fr.collaboration_isolation_reasons || []).map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul></div>
-      <div class="fr-layer"><strong>4️⃣ 팀 평균 비교</strong> ${b4} <span class="muted small">팀 평균 ${(fr.team_mean_contribution ?? 0).toFixed(1)} · Δ ${(fr.delta_vs_team_mean ?? 0).toFixed(1)}</span></div>
-      ${ai}
-    </article>`;
+    </section>
+    <section class="report-section">
+      <h4 class="report-h4">추천 행동</h4>
+      <ul>${rec}</ul>
+    </section>
+  </article>`;
     })
     .join("");
   return `
-  <div class="freerider-panel hud-panel" id="freerider-detection-panel">
-    <h3 class="subh">무임승차 탐지 — 탐지·점수는 Rule, 설명은 AI(선택)</h3>
-    ${ov ? `<p class="prose muted small">${escapeHtml(ov)}</p>` : ""}
-    <div class="fr-cards-grid">${cards}</div>
-  </div>`;
-}
-
-function teamResultHtml(): string {
-  const res = state.team.result;
-  if (!res) return "";
-  const rows = res.members
-    .map((m) => {
-      const sus = m.free_rider_suspected
-        ? `<span class="free-rider-badge" title="자동 의심">무임승차 의심</span>`
-        : `<span class="pill pill-muted">—</span>`;
-      const fr = m.freerider_detection;
-      const frMini =
-        fr &&
-        [
-          fr.basic_low_contribution ? `<span class="fr-badge fr-badge--mini fr-badge--basic" title="1차">Low</span>` : "",
-          (fr.advanced_pattern_flags || []).length ? `<span class="fr-badge fr-badge--mini fr-badge--adv" title="2차">패턴</span>` : "",
-          fr.collaboration_isolated ? `<span class="fr-badge fr-badge--mini fr-badge--iso" title="3차">고립</span>` : "",
-          fr.below_team_average ? `<span class="fr-badge fr-badge--mini fr-badge--avg" title="4차">평균↓</span>` : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-      const risk = m.free_rider_risk != null ? m.free_rider_risk.toFixed(0) : "—";
-      const role = m.contribution_type_label
-        ? `<span class="role-badge">${escapeHtml(m.contribution_type_label)}</span>`
-        : "—";
-      const rs = m.role_scores;
-      const rsTxt =
-        rs && Object.keys(rs).length
-          ? `<span class="muted small role-scores-mini">개발 ${(rs.dev ?? 0).toFixed(0)} · 문서 ${(rs.doc ?? 0).toFixed(0)} · 리더 ${(rs.leader ?? 0).toFixed(0)} · 서포터 ${(rs.supporter ?? 0).toFixed(0)}</span>`
-          : "";
-      return `
-    <tr class="${m.free_rider_suspected ? "row-suspected" : ""}">
-      <td>${escapeHtml(m.name)} ${sus} ${frMini || ""}</td>
-      <td>${m.contribution_index.toFixed(1)}</td>
-      <td>${risk}</td>
-      <td>${role} ${rsTxt}</td>
-      <td>${m.dimensions.technical.toFixed(0)} / ${m.dimensions.collaboration.toFixed(0)} / ${m.dimensions.initiative.toFixed(0)}</td>
-      <td class="muted small">${escapeHtml(m.evidence_summary || "")}</td>
-    </tr>`;
-    })
-    .join("");
-  const sigBlock = res.members
-    .filter((m) => m.free_rider_signals?.length)
-    .map(
-      (m) =>
-        `<p class="signal-line"><strong>${escapeHtml(m.name)}</strong>: ${(m.free_rider_signals || []).map((s) => escapeHtml(s)).join(" · ")}</p>`
-    )
-    .join("");
-  const feedbackBlocks = res.members
-    .map(
-      (m) => `
-    <article class="member-feedback-card hud-panel">
-      <h4>${escapeHtml(m.name)}${m.free_rider_suspected ? ` <span class="free-rider-badge">의심</span>` : ""}</h4>
-      <p class="prose feedback-text">${escapeHtml(m.ai_feedback || "")}</p>
-    </article>`
-    )
-    .join("");
-  const chart = teamTimelineSvg(res.members);
-  const net = teamNetworkSvg(res.collaboration_network, res.members);
-  const dashBlock = teamDashboardBarHtml(res);
-  const adv = res.advanced_mode
-    ? `<span class="pill ${res.advanced_mode === "openai_enriched" ? "pill-on" : "pill-muted"}">${escapeHtml(res.advanced_mode)}</span>`
-    : "";
-  const coSummary = res.contribution_outcome_summary
-    ? `<div class="advanced-summary-box hud-panel"><h3 class="subh">기여 vs 결과 불일치 분석</h3><p class="prose whitespace-pre-wrap">${escapeHtml(res.contribution_outcome_summary)}</p></div>`
-    : "";
-  const mmRows = (res.mismatches || [])
-    .map(
-      (x) => `
-    <tr>
-      <td>${escapeHtml(x.member_name)}</td>
-      <td>${x.contribution_index?.toFixed(1) ?? "—"}</td>
-      <td>${x.outcome_score != null ? x.outcome_score.toFixed(1) : "—"}</td>
-      <td>${x.gap != null ? x.gap.toFixed(1) : "—"}</td>
-      <td><span class="sev sev-${escapeHtml(x.severity || "low")}">${escapeHtml(x.severity || "")}</span></td>
-      <td class="muted small">${escapeHtml(x.note || "")}</td>
-    </tr>`
-    )
-    .join("");
-  const mismatchBlock =
-    res.mismatches && res.mismatches.length
-      ? `<div class="mismatch-table-wrap hud-panel"><h3 class="subh">불일치 상세 (추정 기여 vs 입력 결과)</h3>
-    <table class="data-table"><thead><tr><th>이름</th><th>기여 추정</th><th>결과 점수</th><th>차이</th><th>심각도</th><th>메모</th></tr></thead><tbody>${mmRows}</tbody></table></div>`
-      : "";
-  const anom = (res.anomaly_alerts || [])
-    .map(
-      (a) =>
-        `<p class="anomaly-line"><strong>${escapeHtml(a.member_name)}</strong> <code>${escapeHtml(a.code)}</code> <span class="sev sev-${escapeHtml(a.severity || "medium")}">${escapeHtml(a.severity || "")}</span> — ${escapeHtml(a.message || "")}</p>`
-    )
-    .join("");
-  const anomBlock =
-    res.anomaly_alerts && res.anomaly_alerts.length
-      ? `<div class="anomaly-box hud-panel"><h3 class="subh">비정상 행동 탐지 (고급, 참고)</h3>${anom}</div>`
-      : "";
-  const metaParts: string[] = [];
-  if (res.request_id) metaParts.push(`요청 ID <code class="meta-code">${escapeHtml(res.request_id)}</code>`);
-  if (res.processing_ms != null) metaParts.push(`처리 ${escapeHtml(String(res.processing_ms))}ms`);
-  if (res.generated_at) metaParts.push(escapeHtml(res.generated_at));
-  const metaLine =
-    metaParts.length > 0
-      ? `<p class="result-meta muted small no-print" role="status">${metaParts.join(" · ")}</p>`
-      : "";
-  const creativeBlock = teamCreativePanelHtml(res);
-  const practicalBlock = teamPracticalPanelHtml(res);
-  const freeriderBlock = teamFreeriderPanelHtml(res);
-  const contestBlock = teamContestUpgradeHtml(res);
-  const simBlock = teamSimulatorHtml();
-  return `
-  <section class="panel panel-result hud-panel team-print-root" id="team-printable-root">
-    <div class="result-toolbar no-print" role="toolbar" aria-label="결과 내보내기">
+  <section class="panel panel-result hud-panel team-report-root team-print-root" id="team-printable-root">
+    <div class="result-toolbar no-print" role="toolbar">
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-json">JSON 내보내기</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-copy-summary">요약 복사</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-print">인쇄·PDF</button>
     </div>
-    ${metaLine}
-    <h2>자동 평가 결과 <span class="pill ${res.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(res.mode)}</span> ${adv}</h2>
-    ${res.fairness_notes ? `<p class="prose">${escapeHtml(res.fairness_notes)}</p>` : ""}
-    ${res.free_rider_summary ? `<p class="prose free-rider-summary">${escapeHtml(res.free_rider_summary)}</p>` : ""}
-    ${dashBlock}
-    ${freeriderBlock}
-    ${contestBlock}
-    ${creativeBlock}
-    ${practicalBlock}
-    ${simBlock}
-    ${coSummary}
-    ${sigBlock ? `<div class="signals-box">${sigBlock}</div>` : ""}
-    <div class="table-scroll-wrap">
-    <table class="data-table data-table--team">
-      <thead><tr><th>이름</th><th>기여 지수</th><th>의심도</th><th>기여 유형 (자동)</th><th>기술·협업·주도</th><th>근거 요약</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    </div>
-    ${net}
-    ${mismatchBlock}
-    ${anomBlock}
-    ${chart}
-    <h3 class="subh">팀원별 피드백</h3>
-    <p class="muted small">기여 지수·근거는 규칙·데이터 기반입니다. 아래 문단은 서술 보강·면담용(키 있을 때).</p>
-    <div class="member-feedback-grid">${feedbackBlocks}</div>
-    <p class="footer-note muted small">${escapeHtml(res.disclaimer || "")}</p>
+    <h2>팀 기여도 평가 리포트</h2>
+    <p class="muted small">데이터 → Score Engine → Anomaly → AI 설명 (점수는 AI가 매기지 않음)</p>
+    ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
+    ${edgeCases}
+    <div class="report-flow">${scoreSections}</div>
+    <p class="footer-note muted small">${escapeHtml(rep.disclaimer)}</p>
   </section>`;
 }
+
 
 function teamHtml(): string {
   const blocks = state.team.members.map((m, i) => teamMemberBlock(i, m)).join("");
   return `
   <div class="page page-analyze page-animate analyze-page">
-    <p class="eyebrow eyebrow--shine">Team Project · Auto Evaluation</p>
-    <h1 class="page-title page-title--hero">팀 프로젝트 기여도 자동 평가</h1>
+    <p class="eyebrow eyebrow--shine">Team fairness · 기여도 평가</p>
+    <h1 class="page-title page-title--hero">팀 프로젝트 공정성 — 자동 기여도 평가</h1>
     <p class="lead analyze-lead">
-      정량 지표·주차별 활동·서술을 바탕으로 <strong>기여 지수와 Rule 판단은 규칙·데이터로</strong> 산출합니다.
-      <strong>무임승차 탐지·네트워크·타임라인</strong>은 코드 기반이며, OpenAI 키가 있으면 <strong>설명·해석·피드백 문장</strong> 품질이 올라갑니다(점수 자체를 AI가 매기지는 않음).
-      <strong>창의 인사이트</strong>·팀원별 문단은 참고용입니다. 최종 성적은 교수·기관 규정에 따릅니다.
+      Git 기반 팀 데이터로 <strong>공정한 기여도</strong>를 정량·정성으로 평가하고, <strong>설명 가능한 리포트</strong>를 만듭니다.
+      <strong>계산(Score Engine) · 판단(Anomaly) · 설명(AI)</strong>을 분리했습니다. AI는 점수를 매기지 않습니다.
     </p>
     <div class="pill-row">${providerPills()}</div>
     <section class="panel hud-panel team-arch-panel">
-      <h3 class="subh">전체 시스템 구조 (핵심 5단계)</h3>
-      <p class="muted small">데이터 수집 → 정제 → 분석 → AI 해석 → 결과 출력</p>
+      <h3 class="subh">아키텍처 (계산 / 판단 / 설명 분리)</h3>
       <div class="team-arch-grid">
-        <article class="team-arch-step"><strong>1) 데이터 수집</strong><p class="muted small">Git·문서·협업 로그·시간 데이터를 모아 “얼마나”보다 “어떻게 참여했는지”를 봅니다.</p></article>
-        <article class="team-arch-step"><strong>2) 데이터 정제</strong><p class="muted small">사용자 단위로 묶고 팀 평균·비교값을 계산해 분석 가능한 형태로 만듭니다.</p></article>
-        <article class="team-arch-step"><strong>3) 분석 엔진</strong><p class="muted small">기여도·Rule 혼합 점수는 <strong>데이터·규칙으로만</strong> 산출합니다. AI는 점수 계산에 쓰지 않습니다.</p></article>
-        <article class="team-arch-step"><strong>4) AI 해석</strong><p class="muted small">무임승차 설명·협업 구조 해석·피드백 문장·개선 제안 등 <strong>이해·설명</strong>에만 사용합니다.</p></article>
-        <article class="team-arch-step"><strong>5) 결과 출력</strong><p class="muted small">팀 대시보드·개인 상세·협업 네트워크·타임라인으로 심사위원이 빠르게 이해하게 합니다.</p></article>
+        <article class="team-arch-step"><strong>Score Engine</strong><p class="muted small">커밋·PR·라인·출석·자기서술을 팀 중앙값 대비 정규화해 가중 합산합니다. AI 미사용.</p></article>
+        <article class="team-arch-step"><strong>Anomaly Detector</strong><p class="muted small">3~4개 규칙으로 이상 패턴만 표시합니다. AI 미사용.</p></article>
+        <article class="team-arch-step"><strong>AI Analyzer</strong><p class="muted small">정량 결과·팀 비교·플래그를 바탕으로 요약·강점·개선·행동만 서술합니다.</p></article>
       </div>
-      <p class="muted small team-arch-line">AI는 점수를 만드는 것이 아니라 점수를 이해시키는 역할입니다.</p>
-      <p class="muted small team-arch-connection">백엔드 연결: 프론트는 <code>/api</code>로 요청하고 개발 시 Vite 프록시가 <code>http://127.0.0.1:8000</code>으로 전달합니다.</p>
+      <p class="muted small team-arch-connection">API: <code>POST /api/team/report</code> · 프록시 <code>/api</code> → <code>:8000</code></p>
     </section>
     <p class="muted small team-practice-hint">입력 내용은 브라우저에 <strong>자동 임시 저장</strong>됩니다(성공적으로 평가하면 삭제). 조교·기록용으로 JSON 내보내기·요약 복사를 활용하세요.</p>
 
@@ -2626,11 +1402,8 @@ function teamHtml(): string {
         <button type="button" class="btn btn-ghost" id="btn-team-demo">데모 데이터 입력</button>
         <button type="button" class="btn btn-ghost" id="btn-team-add">멤버 추가</button>
         <button type="button" class="btn btn-ghost" id="btn-team-remove" ${state.team.members.length <= 1 ? "disabled" : ""}>마지막 멤버 제거</button>
-        <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading || state.team.compareLoading ? "disabled" : ""}>
+        <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading ? "disabled" : ""}>
           ${state.team.loading ? "자동 평가 중…" : "자동 평가 실행"}
-        </button>
-        <button type="button" class="btn btn-ghost" id="btn-team-compare" ${state.team.loading || state.team.compareLoading ? "disabled" : ""}>
-          ${state.team.compareLoading ? "AI 멀티평가 실행 중…" : "AI 멀티평가 (ChatGPT·Gemini·Claude·Grok)"}
         </button>
       </div>
       ${state.team.error ? `<p class="err">${escapeHtml(state.team.error)}</p>` : ""}
@@ -2645,25 +1418,7 @@ function teamHtml(): string {
     </div>`
         : ""
     }
-    ${
-      state.team.compareLoading
-        ? `<div class="team-loading hud-panel" aria-live="polite" aria-busy="true">
-      <div class="skeleton-line skeleton-line--long"></div>
-      <p class="muted small">각 제공자 최신 모델로 순차·병렬 호출 중입니다. 키가 모두 있으면 최대 수 분 걸릴 수 있습니다.</p>
-    </div>`
-        : ""
-    }
-    ${teamComparePanelHtml()}
-    ${teamResultHtml()}
-  </div>`;
-}
-
-function weekRowHtml(i: number, w: WeekRow): string {
-  return `
-  <div class="grid-3 member-block hud-panel" style="padding:1rem;margin-bottom:0.5rem;">
-    <div><label class="lbl">주차</label><input class="txt" id="ar_week_${i}" placeholder="예: 3주차" value="${escapeHtml(w.week_label)}" /></div>
-    <div><label class="lbl">참여 0–100</label><input class="txt" id="ar_eng_${i}" type="number" min="0" max="100" step="0.1" value="${escapeHtml(w.engagement)}" /></div>
-    <div><label class="lbl">소평가·퀴즈 (선택)</label><input class="txt" id="ar_as_${i}" type="number" min="0" max="100" step="0.1" value="${escapeHtml(w.assessment_score)}" /></div>
+    ${teamReportHtml()}
   </div>`;
 }
 
@@ -2671,40 +1426,53 @@ function atRiskResultHtml(): string {
   const r = state.atRisk.result;
   if (!r) return "";
   const sig = r.signals.map((s) => `<li>${escapeHtml(s)}</li>`).join("");
+  const verdict = r.dropout_risk >= 50 ? "위험" : "정상";
+  const verdictPill =
+    verdict === "위험"
+      ? `<span class="pill pill-warn" style="font-size:1.1rem;padding:0.35rem 0.75rem;">${verdict}</span>`
+      : `<span class="pill pill-on" style="font-size:1.1rem;padding:0.35rem 0.75rem;">${verdict}</span>`;
   return `
   <section class="panel panel-result hud-panel">
-    <h2>이탈·위험 지수 <span class="score-num">${r.dropout_risk.toFixed(1)}</span> / 100 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <h2 style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">판정 ${verdictPill}
+      <span class="muted small">참고 지수 ${r.dropout_risk.toFixed(1)} / 100 · ${escapeHtml(r.mode)}</span>
+    </h2>
     <p class="prose">${escapeHtml(r.trend_summary)}</p>
     <h4>신호</h4>
     <ul class="prose">${sig}</ul>
-    <h4>개입 제안</h4>
-    <p class="prose">${escapeHtml(r.intervention_suggestions)}</p>
+    <details class="at-risk-details">
+      <summary>상세 (개입 제안 초안)</summary>
+      <p class="prose">${escapeHtml(r.intervention_suggestions)}</p>
+    </details>
     <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
   </section>`;
 }
 
 function atRiskHtml(): string {
-  const weeks = state.atRisk.weeks.map((w, i) => weekRowHtml(i, w)).join("");
   return `
   <div class="page page-animate analyze-page">
     <p class="eyebrow">조기 경보</p>
     <h1 class="page-title">학습 이탈 신호</h1>
-    <p class="lead analyze-lead">주차별 참여 지표를 입력하세요. OpenAI 키가 있으면 서술 요약이 붙습니다.</p>
+    <p class="lead analyze-lead">LMS에서 가져올 수 있는 <strong>출석 비율</strong>과 <strong>과제 제출 비율</strong>만 넣으면 결과는 <strong>정상 / 위험</strong> 두 단계로 표시됩니다.</p>
     <section class="panel hud-panel">
       <div class="grid-2">
         <div><label class="lbl">과목 (선택)</label><input class="txt" id="ar_course" value="${escapeHtml(state.atRisk.course_name)}" /></div>
         <div><label class="lbl">학습자 라벨 (선택)</label><input class="txt" id="ar_student" value="${escapeHtml(state.atRisk.student_label)}" /></div>
       </div>
-      ${weeks}
-      <div class="row-actions">
-        <button type="button" class="btn btn-ghost" id="btn-ar-add">주차 행 추가</button>
-        <button type="button" class="btn btn-ghost" id="btn-ar-remove" ${state.atRisk.weeks.length <= 1 ? "disabled" : ""}>마지막 행 제거</button>
+      <div class="grid-2">
+        <div>
+          <label class="lbl">출석·출첵 비율 %</label>
+          <input class="txt" id="ar_attendance" type="number" min="0" max="100" step="0.1" placeholder="0–100" value="${escapeHtml(state.atRisk.attendance_ratio)}" />
+        </div>
+        <div>
+          <label class="lbl">과제 제출 비율 %</label>
+          <input class="txt" id="ar_assignment" type="number" min="0" max="100" step="0.1" placeholder="0–100" value="${escapeHtml(state.atRisk.assignment_ratio)}" />
+        </div>
       </div>
-      <label class="lbl">추가 메모</label>
+      <label class="lbl">추가 메모 (선택)</label>
       <textarea class="txt" id="ar_notes" rows="2">${escapeHtml(state.atRisk.notes)}</textarea>
       <div class="row-actions">
         <button type="button" class="btn btn-primary" id="btn-ar-run" ${state.atRisk.loading ? "disabled" : ""}>
-          ${state.atRisk.loading ? "분석 중…" : "평가 실행"}
+          ${state.atRisk.loading ? "분석 중…" : "판정 실행"}
         </button>
       </div>
       ${state.atRisk.error ? `<p class="err">${escapeHtml(state.atRisk.error)}</p>` : ""}
@@ -2750,105 +1518,6 @@ function feedbackHtml(): string {
   </div>`;
 }
 
-function syllabusHtml(): string {
-  const r = state.syllabus.result;
-  const resultBlock = r
-    ? `
-  <section class="panel panel-result hud-panel">
-    <h2>답변 초안 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
-    <p class="prose">${escapeHtml(r.answer_draft)}</p>
-    ${
-      r.citations?.length
-        ? `<h4>인용·근거 문장</h4><ul>${r.citations.map((c) => `<li class="prose">${escapeHtml(c)}</li>`).join("")}</ul>`
-        : ""
-    }
-    <p class="footer-note muted small">${escapeHtml(r.caveats || "")}</p>
-  </section>`
-    : "";
-  return `
-  <div class="page page-animate analyze-page">
-    <p class="eyebrow">강의 운영</p>
-    <h1 class="page-title">강의 안내 Q&amp;A 초안</h1>
-    <p class="lead analyze-lead">실라버스·공지 텍스트 일부와 학생 질문을 넣으세요. OpenAI가 있으면 근거 중심 답변이, 없으면 키워드 매칭 발췌가 나옵니다.</p>
-    <section class="panel hud-panel">
-      <label class="lbl">과목명 (선택)</label>
-      <input class="txt" id="sy_course" value="${escapeHtml(state.syllabus.course_name)}" />
-      <label class="lbl">강의 안내·실라버스 발췌</label>
-      <textarea class="txt" id="sy_text" rows="10" placeholder="최소 20자">${escapeHtml(state.syllabus.syllabus_text)}</textarea>
-      <label class="lbl">학생 질문</label>
-      <textarea class="txt" id="sy_q" rows="3">${escapeHtml(state.syllabus.question)}</textarea>
-      <div class="row-actions">
-        <button type="button" class="btn btn-primary" id="btn-sy-run" ${state.syllabus.loading ? "disabled" : ""}>
-          ${state.syllabus.loading ? "생성 중…" : "초안 만들기"}
-        </button>
-      </div>
-      ${state.syllabus.error ? `<p class="err">${escapeHtml(state.syllabus.error)}</p>` : ""}
-    </section>
-    ${resultBlock}
-  </div>`;
-}
-
-function discussionPostBlock(i: number, p: { author: string; text: string }): string {
-  return `
-  <div class="member-block hud-panel">
-    <h4 class="subh">게시 ${i + 1}</h4>
-    <div class="grid-2">
-      <div><label class="lbl">작성자 라벨 (선택)</label><input class="txt" id="disc_author_${i}" placeholder="익명-A" value="${escapeHtml(p.author)}" /></div>
-    </div>
-    <label class="lbl">본문</label>
-    <textarea class="txt" id="disc_text_${i}" rows="4">${escapeHtml(p.text)}</textarea>
-  </div>`;
-}
-
-function discussionHtml(): string {
-  const blocks = state.discussion.posts.map((p, i) => discussionPostBlock(i, p)).join("");
-  const r = state.discussion.result;
-  const resultBlock = r
-    ? `
-  <section class="panel panel-result hud-panel">
-    <h2>요약 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
-    <p class="prose">${escapeHtml(r.summary)}</p>
-    <h4>주제·쟁점</h4>
-    <ul>${r.themes.map((t) => `<li>${escapeHtml(t)}</li>`).join("")}</ul>
-    <h4>참여 메모</h4>
-    <p class="prose">${escapeHtml(r.participation_notes)}</p>
-    <h4>후속 질문 제안</h4>
-    <ul>${r.suggested_followups.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
-    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
-  </section>`
-    : "";
-  return `
-  <div class="page page-animate analyze-page">
-    <p class="eyebrow">토론·포럼</p>
-    <h1 class="page-title">스레드 요약</h1>
-    <p class="lead analyze-lead">게시글을 여러 개 붙여 넣을 수 있습니다. OpenAI가 있으면 의미 요약이, 없으면 글자 수·키워드 통계가 나옵니다.</p>
-    <section class="panel hud-panel">
-      <label class="lbl">스레드 제목 (선택)</label>
-      <input class="txt" id="disc_title" value="${escapeHtml(state.discussion.thread_title)}" />
-      ${blocks}
-      <div class="row-actions">
-        <button type="button" class="btn btn-ghost" id="btn-disc-add">게시 추가</button>
-        <button type="button" class="btn btn-ghost" id="btn-disc-remove" ${state.discussion.posts.length <= 1 ? "disabled" : ""}>마지막 게시 제거</button>
-        <button type="button" class="btn btn-primary" id="btn-disc-run" ${state.discussion.loading ? "disabled" : ""}>
-          ${state.discussion.loading ? "요약 중…" : "요약 실행"}
-        </button>
-      </div>
-      ${state.discussion.error ? `<p class="err">${escapeHtml(state.discussion.error)}</p>` : ""}
-    </section>
-    ${resultBlock}
-  </div>`;
-}
-
-function llmProviderLabel(provider: string): string {
-  const m: Record<string, string> = {
-    gemini: "Gemini",
-    openai: "ChatGPT",
-    claude: "Claude",
-    grok: "Grok",
-  };
-  return m[provider] || provider;
-}
-
 function rubricGenResultHtml(): string {
   const r = state.rubricGen.result;
   if (!r) return "";
@@ -2872,63 +1541,6 @@ function rubricGenResultHtml(): string {
     <pre class="rubric-md-preview mono-input">${escapeHtml(r.rubric_markdown)}</pre>
     <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
   </section>`;
-}
-
-function llmCompareHtml(): string {
-  const r = state.llmCompare.result;
-  const skippedHtml =
-    r && r.providers_skipped.length > 0
-      ? `<p class="skipped muted small">건너뜀: ${escapeHtml(r.providers_skipped.join(" · "))}</p>`
-      : "";
-  const cards =
-    r?.results
-      .map((j) => {
-        if (!j.ok) {
-          return `<div class="card card-err"><h3>${escapeHtml(llmProviderLabel(j.provider))}</h3><p class="err">${escapeHtml(j.error || "오류")}</p></div>`;
-        }
-        return `<div class="card">
-        <div class="card-head">
-          <h3>${escapeHtml(llmProviderLabel(j.provider))}</h3>
-          <span class="model-tag">${escapeHtml(j.model_label || "")}</span>
-        </div>
-        <p class="prose llm-freeform-text">${escapeHtml(j.text)}</p>
-      </div>`;
-      })
-      .join("") ?? "";
-  const resultBlock = r
-    ? `
-  <section class="panel panel-result hud-panel" id="llm-results">
-    <div class="result-toolbar no-print" role="toolbar" aria-label="결과 내보내기">
-      <button type="button" class="btn btn-ghost btn-sm" id="btn-llm-export-json">JSON 내보내기</button>
-    </div>
-    <h2>모델별 응답</h2>
-    ${skippedHtml}
-    <div class="card-grid">${cards}</div>
-    <p class="footer-note">${escapeHtml(r.disclaimer)}</p>
-  </section>`
-    : "";
-  return `
-  <div class="page page-animate analyze-page">
-    <p class="eyebrow">4모델 병렬</p>
-    <h1 class="page-title">Gemini · ChatGPT · Claude · Grok</h1>
-    <p class="lead analyze-lead">동일한 요청을 네 AI에 동시에 보냅니다. <code>backend/.env</code>에 키가 있는 모델만 응답합니다.</p>
-    <div class="pill-row">${providerPills()}</div>
-    <section class="panel hud-panel">
-      <label class="lbl">작업 제목 (선택)</label>
-      <input class="txt" id="llm_task_title" placeholder="예: 수업 개선안 검토" value="${escapeHtml(state.llmCompare.task_title)}" />
-      <label class="lbl">추가 지시 (시스템 힌트, 선택)</label>
-      <textarea class="txt" id="llm_system_hint" rows="2" placeholder="예: bullet으로 짧게">${escapeHtml(state.llmCompare.system_hint)}</textarea>
-      <label class="lbl">분석·질문 내용</label>
-      <textarea class="txt" id="llm_prompt" rows="10" placeholder="여기에 붙여 넣으면 Gemini, ChatGPT, Claude, Grok이 각각 답합니다.">${escapeHtml(state.llmCompare.prompt)}</textarea>
-      <div class="row-actions">
-        <button type="button" class="btn btn-primary" id="btn-llm-run" ${state.llmCompare.loading ? "disabled" : ""}>
-          ${state.llmCompare.loading ? "요청 중…" : "4개 AI 동시 분석"}
-        </button>
-      </div>
-      ${state.llmCompare.error ? `<p class="err">${escapeHtml(state.llmCompare.error)}</p>` : ""}
-    </section>
-    ${resultBlock}
-  </div>`;
 }
 
 function rubricAlignHtml(): string {
@@ -2993,9 +1605,28 @@ function rubricAlignHtml(): string {
   </div>`;
 }
 
+/** 과정·시험 불일치 방향을 한 줄로 (모델 서술 기반, 참고용). */
+function inferProcessExamTriage(res: AnalyzeResponse): "정상" | "과제 과대" | "시험 과대" {
+  const blob = [
+    res.consensus_summary,
+    ...res.judgments.filter((j) => j.ok).map((j) => j.mismatch_analysis),
+  ].join("\n");
+  if (/시험.*(높|우수|양호|과대|만점|상위)|과정.*(낮|부족|미흡|하락)/.test(blob)) return "시험 과대";
+  if (/과제.*(높|우수|양호|과대)|과정.*(높|우수).*시험.*(낮|부족|미흡)/.test(blob)) return "과제 과대";
+  return "정상";
+}
+
 function resultSectionHtml(): string {
   if (!state.result) return "";
   const res = state.result;
+  const triage = inferProcessExamTriage(res);
+  const triPill =
+    triage === "정상"
+      ? "pill-on"
+      : triage === "과제 과대"
+        ? "pill-muted"
+        : "pill-warn";
+  const triageLine = `<p class="analyze-triage-line"><span class="pill ${triPill}">요약: ${triage}</span> <span class="muted small">과정 vs 시험 불일치 방향(참고)</span></p>`;
   const avg =
     res.consensus_cheating_avg != null
       ? `<p class="consensus"><strong>합의 평균 부정행위 의심도:</strong> ${res.consensus_cheating_avg.toFixed(1)} / 100</p>`
@@ -3035,6 +1666,7 @@ function resultSectionHtml(): string {
       <button type="button" class="btn btn-ghost btn-sm" id="btn-analyze-export-json">JSON 내보내기</button>
     </div>
     <h2>분석 결과</h2>
+    ${triageLine}
     <p class="prose">${escapeHtml(res.consensus_summary)}</p>
     ${avg}
     ${skippedHtml}
@@ -3046,9 +1678,9 @@ function resultSectionHtml(): string {
 function analyzeHtml(): string {
   return `
   <div class="page page-animate analyze-page">
-    <p class="eyebrow">입력</p>
+    <p class="eyebrow">보조 · 과정 vs 시험</p>
     <h1 class="page-title">과정 지표와 시험 점수</h1>
-    <p class="lead analyze-lead">아래 항목을 채운 뒤 실행하세요. 상단 알약은 백엔드에 연결된 API 키 상태입니다.</p>
+    <p class="lead analyze-lead">LMS·과제 지표와 시험 점수를 넣으면 <strong>불일치 방향</strong>을 참고용으로 요약합니다. 상단 알약은 API 키 연결 상태입니다.</p>
     <div class="pill-row">${providerPills()}</div>
 
     <section class="panel hud-panel">
@@ -3113,7 +1745,7 @@ function analyzeHtml(): string {
 
       <div class="row-actions">
         <button type="button" class="btn btn-primary" id="btn-analyze" ${state.loading ? "disabled" : ""}>
-          ${state.loading ? "분석 중…" : "다중 AI 분석 실행"}
+          ${state.loading ? "분석 중…" : "불일치 분석 실행"}
         </button>
       </div>
       ${state.error ? `<p class="err">${escapeHtml(state.error)}</p>` : ""}
@@ -3132,14 +1764,8 @@ function mainContentHtml(): string {
       return atRiskHtml();
     case "feedback":
       return feedbackHtml();
-    case "syllabus":
-      return syllabusHtml();
-    case "discussion":
-      return discussionHtml();
     case "rubric":
       return rubricAlignHtml();
-    case "llm":
-      return llmCompareHtml();
     case "analyze":
       return analyzeHtml();
     default:
@@ -3207,18 +1833,9 @@ function setView(v: SiteView): void {
   if (state.view === "feedback") {
     readFeedbackForm();
   }
-  if (state.view === "syllabus") {
-    readSyllabusForm();
-  }
-  if (state.view === "discussion") {
-    readDiscussionForm();
-  }
   if (state.view === "rubric") {
     readRubricAlignForm();
     readRubricGenForm();
-  }
-  if (state.view === "llm") {
-    readLlmCompareForm();
   }
   state.view = v;
   if (v === "team") {
@@ -3273,15 +1890,11 @@ function wire(): void {
     void submitTeam();
   });
 
-  document.getElementById("btn-team-compare")?.addEventListener("click", () => {
-    void submitTeamCompare();
-  });
-
   document.querySelector(".team-form-panel")?.addEventListener("input", scheduleTeamDraftSave);
   document.querySelector(".team-form-panel")?.addEventListener("change", scheduleTeamDraftSave);
 
   document.getElementById("btn-team-export-json")?.addEventListener("click", () => {
-    const r = state.team.result;
+    const r = state.team.report;
     if (!r) return;
     const blob = new Blob([JSON.stringify(r, null, 2)], { type: "application/json;charset=utf-8" });
     const safe = (state.team.project_name || "team-eval").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
@@ -3293,9 +1906,9 @@ function wire(): void {
   });
 
   document.getElementById("btn-team-copy-summary")?.addEventListener("click", async () => {
-    const r = state.team.result;
+    const r = state.team.report;
     if (!r) return;
-    const text = teamExportSummaryText(r);
+    const text = teamUnifiedExportSummaryText(r);
     try {
       await navigator.clipboard.writeText(text);
     } catch {
@@ -3307,52 +1920,12 @@ function wire(): void {
     window.print();
   });
 
-  document.getElementById("team-sim-member")?.addEventListener("change", updateTeamSimDisplay);
-  document.getElementById("team-sim-extra")?.addEventListener("input", updateTeamSimDisplay);
-  updateTeamSimDisplay();
-
-  document.getElementById("btn-ar-add")?.addEventListener("click", () => {
-    readAtRiskForm();
-    state.atRisk.weeks.push(emptyWeekRow());
-    state.view = "at-risk";
-    render();
-  });
-
-  document.getElementById("btn-ar-remove")?.addEventListener("click", () => {
-    readAtRiskForm();
-    if (state.atRisk.weeks.length > 1) state.atRisk.weeks.pop();
-    state.view = "at-risk";
-    render();
-  });
-
   document.getElementById("btn-ar-run")?.addEventListener("click", () => {
     void submitAtRisk();
   });
 
   document.getElementById("btn-fb-run")?.addEventListener("click", () => {
     void submitFeedback();
-  });
-
-  document.getElementById("btn-sy-run")?.addEventListener("click", () => {
-    void submitSyllabus();
-  });
-
-  document.getElementById("btn-disc-add")?.addEventListener("click", () => {
-    readDiscussionForm();
-    state.discussion.posts.push(emptyDiscussionPost());
-    state.view = "discussion";
-    render();
-  });
-
-  document.getElementById("btn-disc-remove")?.addEventListener("click", () => {
-    readDiscussionForm();
-    if (state.discussion.posts.length > 1) state.discussion.posts.pop();
-    state.view = "discussion";
-    render();
-  });
-
-  document.getElementById("btn-disc-run")?.addEventListener("click", () => {
-    void submitDiscussion();
   });
 
   document.getElementById("btn-ra-run")?.addEventListener("click", () => {
@@ -3382,15 +1955,6 @@ function wire(): void {
   document.getElementById("btn-analyze-export-json")?.addEventListener("click", () => {
     if (!state.result) return;
     downloadJsonExport("analyze-learning-exam", state.result);
-  });
-
-  document.getElementById("btn-llm-export-json")?.addEventListener("click", () => {
-    if (!state.llmCompare.result) return;
-    downloadJsonExport("llm-compare", state.llmCompare.result);
-  });
-
-  document.getElementById("btn-llm-run")?.addEventListener("click", () => {
-    void submitLlmCompare();
   });
 
   document.getElementById("btn-health-retry")?.addEventListener("click", () => {

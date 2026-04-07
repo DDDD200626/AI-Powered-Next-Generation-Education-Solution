@@ -224,3 +224,44 @@ def test_team_evaluate_compare_no_api_keys_returns_models(monkeypatch: pytest.Mo
     assert data.get("explainability") == []
     assert "request_id" in data
     assert r.headers.get("X-Request-ID")
+
+
+def test_team_report_unified_pipeline() -> None:
+    """Score Engine → Anomaly → Analysis 구조 분리."""
+    r = client.post(
+        "/api/team/report",
+        json={
+            "project_name": "통합 리포트 테스트",
+            "teamData": [
+                {
+                    "name": "A",
+                    "commits": 20,
+                    "prs": 4,
+                    "lines": 800,
+                    "attendance": 90,
+                    "selfReport": "백엔드 API",
+                },
+                {
+                    "name": "B",
+                    "commits": 5,
+                    "prs": 1,
+                    "lines": 100,
+                    "attendance": 70,
+                    "selfReport": "문서",
+                },
+            ],
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["scores"]) == 2
+    assert len(data["anomalies"]) == 2
+    assert len(data["analysis"]) == 2
+    assert "trust_scores" in data and data["trust_scores"]
+    assert "evaluation_log" in data
+    assert data["evaluation_log"].get("request_id")
+    assert data["evaluation_log"].get("input_hash")
+    s0 = data["scores"][0]
+    assert "rawScore" in s0 and "normalizedScore" in s0 and "rank" in s0
+    assert "breakdown" in s0
+    assert r.headers.get("X-Request-ID")
