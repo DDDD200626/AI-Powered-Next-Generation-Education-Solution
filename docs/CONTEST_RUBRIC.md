@@ -10,7 +10,7 @@
 |-----------|-------------------|-----------|
 | 아키텍처 | **백엔드(FastAPI)**와 **프론트엔드(Vite/TS)** 분리, REST API | 저장소 구조, `GET /docs` OpenAPI |
 | 안정성·재현 | **pytest** 회귀 테스트, **GitHub Actions CI** | `backend/tests/`, `.github/workflows/ci.yml` |
-| 운영 추적 | 응답 **`X-Request-ID`**, 팀 평가 **`request_id`·`processing_ms`** | 헤더·JSON 메타 |
+| 운영 추적 | 응답 **`X-Request-ID`**, 팀 평가 **`request_id`·`processing_ms`**, **`GET /api/observability`**(업타임·환경), **`GET /api/ready`**·**`/api/live`**(프로브) | 헤더·JSON·프론트 운영 콘솔 |
 | 배포 | **Dockerfile** + **docker-compose** (선택) | 루트 `docker-compose.yml` |
 
 ```mermaid
@@ -69,6 +69,8 @@ flowchart LR
 - `GET /api/health` — 상태·버전·AI 키 설정
 - `GET /api/version` — 앱 메타
 - `GET /api/capabilities` — **심사 4축 요약·엔드포인트 목록** (기계 판독용 JSON)
+- `GET /api/observability` — 업타임·환경·런타임 메타 (관측성)
+- `GET /api/ready` · `GET /api/live` — 배포·K8s 스타일 헬스 프로브
 
 ---
 

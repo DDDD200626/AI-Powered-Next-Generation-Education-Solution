@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+import time
 
 from learning_analysis.heuristic import heuristic_judgment
 from learning_analysis.providers import call_claude, call_gemini, call_grok, call_openai
@@ -32,6 +34,7 @@ def _xai_key() -> str | None:
 
 
 async def analyze_async(req: AnalyzeRequest) -> AnalyzeResponse:
+    t_start = time.perf_counter()
     used: list[str] = []
     skipped: list[str] = []
     tasks: list[tuple[str, asyncio.Task]] = []
@@ -65,9 +68,12 @@ async def analyze_async(req: AnalyzeRequest) -> AnalyzeResponse:
         skipped.append("grok (XAI_API_KEY 또는 GROK_API_KEY 없음)")
 
     judgments: list[ModelJudgment] = []
+    llm_parallel_ms = 0.0
 
     if tasks:
+        t_gather = time.perf_counter()
         results = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
+        llm_parallel_ms = (time.perf_counter() - t_gather) * 1000
         for (name, _), res in zip(tasks, results):
             if isinstance(res, BaseException):
                 judgments.append(
@@ -112,6 +118,14 @@ async def analyze_async(req: AnalyzeRequest) -> AnalyzeResponse:
     if not consensus_summary.strip():
         consensus_summary = "유효한 모델 응답이 없습니다. API 키·네트워크·모델명을 확인하세요."
 
+    total_ms = (time.perf_counter() - t_start) * 1000
+    local_ms = max(0.0, total_ms - llm_parallel_ms)
+    perf = {
+        "llm_parallel_ms": round(llm_parallel_ms, 2),
+        "local_ms": round(local_ms, 2),
+        "total_ms": round(total_ms, 2),
+    }
+
     return AnalyzeResponse(
         providers_used=used,
         providers_skipped=skipped,
@@ -119,6 +133,7 @@ async def analyze_async(req: AnalyzeRequest) -> AnalyzeResponse:
         consensus_cheating_avg=consensus_avg,
         consensus_summary=consensus_summary[:6000],
         disclaimer=DISCLAIMER_KO,
+        perf=perf,
     )
 
 
@@ -126,10 +141,23 @@ def analyze_sync(req: AnalyzeRequest) -> AnalyzeResponse:
     return asyncio.run(analyze_async(req))
 
 
+_STATUS_LOCK = threading.Lock()
+_STATUS_CACHE: tuple[float, dict[str, bool]] | None = None
+_STATUS_TTL_SEC = 2.0
+
+
 def provider_keys_status() -> dict[str, bool]:
-    return {
-        "gemini": _gemini_key() is not None,
-        "openai": _openai_key() is not None,
-        "claude": _anthropic_key() is not None,
-        "grok": _xai_key() is not None,
-    }
+    """환경 변수 조회는 저빈도 캐시 — /api/health 폴링 시 CPU·락 부담 감소."""
+    global _STATUS_CACHE
+    now = time.monotonic()
+    with _STATUS_LOCK:
+        if _STATUS_CACHE is not None and (now - _STATUS_CACHE[0]) < _STATUS_TTL_SEC:
+            return _STATUS_CACHE[1]
+        st = {
+            "gemini": _gemini_key() is not None,
+            "openai": _openai_key() is not None,
+            "claude": _anthropic_key() is not None,
+            "grok": _xai_key() is not None,
+        }
+        _STATUS_CACHE = (now, st)
+        return st

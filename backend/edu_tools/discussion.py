@@ -11,6 +11,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from learning_analysis.llm_clients import get_openai_client
+
 router = APIRouter()
 
 
@@ -55,9 +57,7 @@ def _heuristic(req: DiscussionSynthesizeRequest) -> DiscussionSynthesizeResponse
 
 
 def _openai_syn(req: DiscussionSynthesizeRequest, api_key: str) -> DiscussionSynthesizeResponse:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
     sys = """교육용 토론 스레드 요약 조교입니다. JSON만 출력하세요.
 {
   "summary": "한국어 3~6문장",

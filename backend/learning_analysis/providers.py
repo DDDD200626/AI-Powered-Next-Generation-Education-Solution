@@ -7,6 +7,12 @@ import os
 import re
 from typing import Any
 
+from learning_analysis.llm_clients import (
+    ensure_gemini_configured,
+    get_anthropic_client,
+    get_openai_client,
+    get_openai_xai_client,
+)
 from learning_analysis.prompts import SYSTEM_KO, user_message
 from learning_analysis.schemas import AnalyzeRequest, ModelJudgment
 
@@ -55,7 +61,7 @@ def call_gemini(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
     import google.generativeai as genai
 
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-    genai.configure(api_key=api_key)
+    ensure_gemini_configured(api_key)
     model = genai.GenerativeModel(model_name=model_name, system_instruction=SYSTEM_KO)
     try:
         res = model.generate_content(
@@ -73,10 +79,8 @@ def call_gemini(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
 
 
 def call_openai(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
-    from openai import OpenAI
-
     model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
     try:
         res = client.chat.completions.create(
             model=model_name,
@@ -95,10 +99,8 @@ def call_openai(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
 
 
 def call_claude(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
-    import anthropic
-
     model_name = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-    client = anthropic.Anthropic(api_key=api_key)
+    client = get_anthropic_client(api_key)
     try:
         res = client.messages.create(
             model=model_name,
@@ -120,11 +122,9 @@ def call_claude(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
 
 
 def call_grok(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
-    from openai import OpenAI
-
     model_name = os.environ.get("GROK_MODEL", "grok-2-latest")
     base = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1")
-    client = OpenAI(api_key=api_key, base_url=base)
+    client = get_openai_xai_client(api_key, base)
     try:
         res = client.chat.completions.create(
             model=model_name,

@@ -10,6 +10,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from learning_analysis.llm_clients import get_openai_client
+
 router = APIRouter()
 
 
@@ -78,9 +80,7 @@ def _heuristic(req: AtRiskRequest) -> AtRiskResponse:
 
 
 def _openai_risk(req: AtRiskRequest, api_key: str) -> AtRiskResponse:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
     sys = """학습 이탈 조기 경보용 JSON만 출력하세요.
 {
   "dropout_risk": 0-100,

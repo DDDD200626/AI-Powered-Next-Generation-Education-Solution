@@ -10,6 +10,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from learning_analysis.llm_clients import get_openai_client
+
 router = APIRouter()
 
 
@@ -66,9 +68,7 @@ def _heuristic(req: CourseAskRequest) -> CourseAskResponse:
 
 
 def _openai_ask(req: CourseAskRequest, api_key: str) -> CourseAskResponse:
-    from openai import OpenAI
-
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
     sys = """당신은 대학 조교입니다. 제공된 강의 안내(실라버스 일부)만 근거로 학생 질문에 답하는 초안을 씁니다.
 JSON만 출력하세요.
 {

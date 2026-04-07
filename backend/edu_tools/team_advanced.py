@@ -10,14 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-def _openai_timeout_sec() -> float:
-    raw = (os.environ.get("OPENAI_TIMEOUT_SEC") or "120").strip()
-    try:
-        v = float(raw)
-    except ValueError:
-        v = 120.0
-    return max(5.0, min(600.0, v))
+from learning_analysis.llm_clients import get_openai_client
 
 
 class CollaborationEdgeIn(BaseModel):
@@ -230,8 +223,6 @@ def openai_enrich_advanced(
     heuristic_bundle: dict[str, Any],
     api_key: str,
 ) -> dict[str, Any]:
-    from openai import OpenAI
-
     sys = """교육용 팀 분석가입니다. JSON만 출력하세요.
 {
   "contribution_outcome_comment": "기여-결과 불일치에 대한 한국어 해설(2~4문장)",
@@ -240,7 +231,7 @@ def openai_enrich_advanced(
 }
 휴리스틱과 크게 다르지 않아도 되나, peer_notes·self_report 맥락을 반영하세요."""
 
-    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
+    client = get_openai_client(api_key)
     user = json.dumps(
         {"project": project, "members": members_payload, "heuristic": heuristic_bundle},
         ensure_ascii=False,

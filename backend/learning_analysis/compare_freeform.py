@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 
+from learning_analysis.llm_clients import (
+    ensure_gemini_configured,
+    get_anthropic_client,
+    get_openai_client,
+    get_openai_xai_client,
+)
 from learning_analysis.schemas import LLMCompareRequest, LLMCompareResponse, LLMTextResult
 
 DISCLAIMER_KO = (
@@ -51,7 +58,7 @@ def call_gemini_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
     system = _build_system(req)
     user = _user_block(req)
-    genai.configure(api_key=api_key)
+    ensure_gemini_configured(api_key)
     model = genai.GenerativeModel(model_name=model_name, system_instruction=system)
     try:
         res = model.generate_content(
@@ -65,10 +72,8 @@ def call_gemini_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
 
 
 def call_openai_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
-    from openai import OpenAI
-
     model_name = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    client = OpenAI(api_key=api_key)
+    client = get_openai_client(api_key)
     try:
         res = client.chat.completions.create(
             model=model_name,
@@ -86,10 +91,8 @@ def call_openai_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
 
 
 def call_claude_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
-    import anthropic
-
     model_name = os.environ.get("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-    client = anthropic.Anthropic(api_key=api_key)
+    client = get_anthropic_client(api_key)
     try:
         res = client.messages.create(
             model=model_name,
@@ -110,11 +113,9 @@ def call_claude_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
 
 
 def call_grok_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
-    from openai import OpenAI
-
     model_name = os.environ.get("GROK_MODEL", "grok-2-latest")
     base = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1")
-    client = OpenAI(api_key=api_key, base_url=base)
+    client = get_openai_xai_client(api_key, base)
     try:
         res = client.chat.completions.create(
             model=model_name,
@@ -132,6 +133,7 @@ def call_grok_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
 
 
 async def compare_llm_async(req: LLMCompareRequest) -> LLMCompareResponse:
+    t_start = time.perf_counter()
     used: list[str] = []
     skipped: list[str] = []
     tasks: list[tuple[str, asyncio.Task]] = []
@@ -165,8 +167,11 @@ async def compare_llm_async(req: LLMCompareRequest) -> LLMCompareResponse:
         skipped.append("grok (XAI_API_KEY 또는 GROK_API_KEY 없음)")
 
     results: list[LLMTextResult] = []
+    llm_parallel_ms = 0.0
     if tasks:
+        t_gather = time.perf_counter()
         out = await asyncio.gather(*(t[1] for t in tasks), return_exceptions=True)
+        llm_parallel_ms = (time.perf_counter() - t_gather) * 1000
         for (name, _), res in zip(tasks, out):
             if isinstance(res, BaseException):
                 results.append(
@@ -175,9 +180,18 @@ async def compare_llm_async(req: LLMCompareRequest) -> LLMCompareResponse:
             else:
                 results.append(res)
 
+    total_ms = (time.perf_counter() - t_start) * 1000
+    local_ms = max(0.0, total_ms - llm_parallel_ms)
+    perf = {
+        "llm_parallel_ms": round(llm_parallel_ms, 2),
+        "local_ms": round(local_ms, 2),
+        "total_ms": round(total_ms, 2),
+    }
+
     return LLMCompareResponse(
         providers_used=used,
         providers_skipped=skipped,
         results=results,
         disclaimer=DISCLAIMER_KO,
+        perf=perf,
     )

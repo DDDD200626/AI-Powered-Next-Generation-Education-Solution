@@ -59,6 +59,10 @@ class AnalyzeResponse(BaseModel):
     consensus_cheating_avg: float | None = Field(None, description="모델 평균 부정행위 의심도")
     consensus_summary: str = Field("", description="종합 요약")
     disclaimer: str = Field("", description="법적·교육적 한계 안내")
+    perf: dict[str, float] | None = Field(
+        default=None,
+        description="병목 분석(ms): llm_parallel_ms, local_ms, total_ms — 언어 변경 전에 확인",
+    )
 
 
 class LLMCompareRequest(BaseModel):
@@ -82,3 +86,7 @@ class LLMCompareResponse(BaseModel):
     providers_skipped: list[str] = Field(default_factory=list)
     results: list[LLMTextResult]
     disclaimer: str = ""
+    perf: dict[str, float] | None = Field(
+        default=None,
+        description="병목 분석(ms): llm_parallel_ms, local_ms, total_ms",
+    )

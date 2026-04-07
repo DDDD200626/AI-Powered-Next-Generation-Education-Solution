@@ -17,7 +17,10 @@ def test_health_ok_and_request_id_header() -> None:
     assert body["status"] == "ok"
     assert "providers" in body
     assert body.get("version")
+    assert body.get("app_name")
+    assert body.get("openapi_docs") == "/docs"
     assert r.headers.get("X-Request-ID")
+    assert r.headers.get("X-Process-Time-Ms")
 
 
 def test_version_endpoint() -> None:
@@ -27,6 +30,51 @@ def test_version_endpoint() -> None:
     assert data["name"]
     assert data["version"]
     assert "/docs" in data.get("openapi_docs", "")
+
+
+def test_perf_recent() -> None:
+    client.get("/api/health")
+    r = client.get("/api/perf/recent")
+    assert r.status_code == 200
+    data = r.json()
+    assert "recent" in data
+    assert isinstance(data["recent"], list)
+    assert data.get("ring_buffer_enabled") is True
+    assert r.headers.get("Cache-Control", "").startswith("no-store")
+
+
+def test_analyze_includes_perf_breakdown() -> None:
+    body = {
+        "course_name": "테스트",
+        "student_or_group_label": "익명",
+        "learning": {},
+        "exam": {},
+        "context_for_educator": "",
+    }
+    r = client.post("/api/analyze", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    assert "perf" in data and data["perf"]
+    assert "llm_parallel_ms" in data["perf"]
+    assert "local_ms" in data["perf"]
+    assert "total_ms" in data["perf"]
+
+
+def test_observability_ready_live() -> None:
+    r = client.get("/api/observability")
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("service")
+    assert data.get("version")
+    assert "uptime_seconds" in data
+    assert data.get("environment")
+    assert r.headers.get("Cache-Control", "").startswith("no-store")
+    r2 = client.get("/api/ready")
+    assert r2.status_code == 200
+    assert r2.json().get("status") == "ready"
+    r3 = client.get("/api/live")
+    assert r3.status_code == 200
+    assert r3.json().get("status") == "live"
 
 
 def test_capabilities_contest_rubric() -> None:
@@ -40,7 +88,28 @@ def test_capabilities_contest_rubric() -> None:
     assert "planning_practical" in rub
     assert "creativity" in rub
     assert data["endpoints"]["team_evaluate"] == "POST /api/team/evaluate"
+    assert data["endpoints"].get("observability") == "GET /api/observability"
+    assert data["endpoints"].get("ready") == "GET /api/ready"
+    assert data["endpoints"].get("perf_recent") == "GET /api/perf/recent"
     assert r.headers.get("X-Request-ID")
+
+
+def test_rubric_draft_heuristic_returns_criteria() -> None:
+    r = client.post(
+        "/api/rubric/draft",
+        json={
+            "learning_objectives": "REST API를 설계하고 문서화할 수 있다.\n보안·오류 처리를 적용한다.",
+            "course_name": "웹서비스",
+            "assignment_type": "팀 프로젝트",
+            "max_criteria": 4,
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("mode") in ("heuristic", "ai")
+    assert len(data.get("criteria") or []) >= 3
+    assert data.get("rubric_markdown")
+    assert "disclaimer" in data
 
 
 def test_team_evaluate_heuristic_has_creative_insights() -> None:
