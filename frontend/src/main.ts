@@ -2,9 +2,6 @@ import "./style.css";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
-const REPO_URL =
-  "https://github.com/DDDD200626/AI-Powered-Next-Generation-Education-Solution";
-
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
@@ -1132,7 +1129,6 @@ function navHtml(): string {
       <nav class="nav" aria-label="주요 메뉴">
         <button type="button" class="${cur("team")}" data-view="team">평가</button>
         <button type="button" class="${cur("hub")}" data-view="hub">분석 기능</button>
-        <a class="nav-link nav-gh" href="${REPO_URL}" target="_blank" rel="noopener noreferrer">GitHub</a>
       </nav>
     </div>
   </header>`;
@@ -1140,16 +1136,15 @@ function navHtml(): string {
 
 function footerHtml(): string {
   const docsHref = API_BASE ? `${API_BASE}/docs` : "/docs";
-  const apiMeta =
+  const openApiLink =
     state.health?.version != null
-      ? ` · <a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI ${escapeHtml(state.health.version)}</a>`
-      : ` · <a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI</a>`;
+      ? `<a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI ${escapeHtml(state.health.version)}</a>`
+      : `<a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI</a>`;
   return `
   <footer class="site-footer">
     <div class="footer-inner">
       <p class="footer-line">
-        <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">저장소</a>
-        ${apiMeta}
+        ${openApiLink}
         · 교육 보조 도구이며 징계·단정에 사용할 수 없습니다.
       </p>
       <p class="footer-muted">팀 프로젝트 기여도 자동 평가 시스템 — 교육 보조·참고용</p>

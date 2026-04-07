@@ -142,15 +142,6 @@ body {
   background: var(--accent-soft);
 }
 
-.nav-gh {
-  border: 1px solid var(--border);
-}
-
-.nav-gh:hover {
-  border-color: var(--border-strong);
-  background: var(--surface);
-}
-
 .site-main {
   flex: 1;
   max-width: var(--content-max);
@@ -1056,39 +1047,6 @@ textarea.txt {
   margin: 0 0 1rem;
   color: var(--text);
   letter-spacing: -0.02em;
-}
-
-.result-sample-panel {
-  margin-bottom: 1rem;
-}
-
-.result-sample-grid {
-  display: grid;
-  gap: 0.85rem;
-  grid-template-columns: 1fr;
-}
-
-@media (min-width: 820px) {
-  .result-sample-grid {
-    grid-template-columns: 1.2fr 1fr;
-  }
-}
-
-.result-sample-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  padding: 0.9rem 1rem;
-}
-
-.result-sample-score {
-  margin: 0 0 0.5rem;
-  font-size: 0.95rem;
-}
-
-.result-sample-list {
-  margin: 0;
-  padding-left: 1.1rem;
 }
 
 .analysis-flow {
