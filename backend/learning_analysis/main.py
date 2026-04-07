@@ -46,6 +46,7 @@ from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse, LLMCompar
 def _cors_origins() -> list[str]:
     _default = (
         "http://127.0.0.1:5173,http://localhost:5173,"
+        "http://127.0.0.1:5174,http://localhost:5174,"
         "http://127.0.0.1:4173,http://localhost:4173,"
         "http://127.0.0.1:8080,http://localhost:8080"
     )
@@ -53,6 +54,19 @@ def _cors_origins() -> list[str]:
     if not raw:
         return [o.strip() for o in _default.split(",") if o.strip()]
     return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def _cors_origin_regex() -> str | None:
+    """LAN IP로 Vite 접속 시 Origin이 192.168.x.x:5173 등이 됨 — 직접 API 호출(CORS) 허용."""
+    raw = os.environ.get("CORS_ORIGIN_REGEX", "").strip()
+    if raw.lower() in ("0", "false", "no", "off"):
+        return None
+    if raw:
+        return raw
+    return (
+        r"^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})"
+        r":(5173|5174|4173|8080)$"
+    )
 
 
 _APP_DESC = """## 심사기준 정렬
@@ -135,6 +149,7 @@ def _capabilities_payload() -> dict[str, Any]:
             "live": "GET /api/live",
             "openapi_json": "GET /openapi.json",
             "team_evaluate": "POST /api/team/evaluate",
+            "team_evaluate_compare": "POST /api/team/evaluate/compare",
             "analyze": "POST /api/analyze",
             "llm_compare": "POST /api/llm/compare",
             "perf_recent": "GET /api/perf/recent",
@@ -173,13 +188,16 @@ app.include_router(course_qa_router, prefix="/api/course", tags=["course"])
 app.include_router(discussion_router, prefix="/api/discussion", tags=["discussion"])
 app.include_router(rubric_align_router, prefix="/api/rubric", tags=["rubric"])
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_kw: dict[str, Any] = {
+    "allow_origins": _cors_origins(),
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+_rx = _cors_origin_regex()
+if _rx:
+    _cors_kw["allow_origin_regex"] = _rx
+app.add_middleware(CORSMiddleware, **_cors_kw)
 app.add_middleware(GZipMiddleware, minimum_size=800)
 
 

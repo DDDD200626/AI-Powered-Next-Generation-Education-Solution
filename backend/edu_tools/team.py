@@ -125,6 +125,47 @@ class DimensionScores(BaseModel):
     initiative: float
 
 
+class FreeriderRuleMetrics(BaseModel):
+    """Rule 기반: 활동량·협업·일관성(시간 패턴)·상호작용 → 혼합 점수·등급."""
+
+    activity_score: float = Field(0.0, ge=0, le=100)
+    collaboration_score: float = Field(0.0, ge=0, le=100)
+    consistency_score: float = Field(0.0, ge=0, le=100)
+    blended_score: float = Field(0.0, ge=0, le=100, description="0.4·0.3·0.3 가중")
+    final_score: float = Field(0.0, ge=0, le=100, description="무임승차 의심 시 ×0.6 보정 후")
+    penalty_applied: bool = False
+    activity_risk: bool = False
+    collaboration_risk: bool = False
+    consistency_risk: bool = False
+    interaction_risk: bool = False
+    rule_conditions_met: int = Field(0, ge=0, le=4)
+    risk_level: str = Field("", description="normal | caution | suspected")
+    grade_ko: str = Field("", description="핵심 기여 | 일반 | 낮음 | 무임승차 의심")
+    analysis_lines: list[str] = Field(default_factory=list, description="개인 상세용 요약 불릿")
+
+
+class FreeriderDetectionReport(BaseModel):
+    """무임승차 자동 탐지 4단계(수상용 구조): 1차 저기여 → 2차 패턴 → 3차 고립 → 4차 팀평균."""
+
+    basic_low_contribution: bool = Field(False, description="1차: Low Contribution")
+    basic_reasons: list[str] = Field(default_factory=list)
+    advanced_pattern_flags: list[str] = Field(
+        default_factory=list,
+        description="2차: 비정상 참여 패턴(몰아치기·기간 집중·상호작용 부족 등)",
+    )
+    advanced_pattern_score: float = Field(0.0, ge=0, le=100)
+    collaboration_isolated: bool = Field(False, description="3차: 협업 고립 사용자")
+    collaboration_isolation_reasons: list[str] = Field(default_factory=list)
+    below_team_average: bool = Field(False, description="4차: 팀 평균 대비 낮음")
+    team_mean_contribution: float = Field(0.0, description="팀 기여 지수 평균")
+    delta_vs_team_mean: float = Field(0.0, description="본인 기여 − 팀 평균")
+    ai_detection_summary: str = Field(
+        "",
+        description="무임승차 탐지·Rule 점수는 코드로 확정, AI는 교육자용 설명·해석만",
+    )
+    rule_metrics: FreeriderRuleMetrics = Field(default_factory=FreeriderRuleMetrics)
+
+
 class TimelinePointOut(BaseModel):
     period_label: str
     share_percent: float = Field(..., ge=0, le=100, description="해당 시점 팀 내 상대 기여 비율")
@@ -148,6 +189,7 @@ class MemberOut(BaseModel):
         default_factory=dict,
         description="dev, doc, leader, supporter 합산 100 근사",
     )
+    freerider_detection: FreeriderDetectionReport = Field(default_factory=FreeriderDetectionReport)
 
 
 class MemberExplainFact(BaseModel):
@@ -203,6 +245,176 @@ class PracticalToolkit(BaseModel):
     checklist_note: str = "체크리스트는 참고용이며, 기관 규정·개인정보 보호를 우선합니다."
 
 
+class ModelEvalBundle(BaseModel):
+    """단일 LLM(최신 ChatGPT·Gemini·Claude·Grok 등)별 팀 평가 결과."""
+
+    key: str = Field(..., description="openai | gemini | claude | grok")
+    label: str = Field(..., description="실제 모델명(환경변수 기준)")
+    ok: bool
+    error: str | None = None
+    result: TeamEvaluateResponse | None = None
+
+
+class MemberContributionCompare(BaseModel):
+    member_name: str
+    contribution_index_by_model: dict[str, float] = Field(
+        ...,
+        description="모델 key → 기여 지수(0–100)",
+    )
+    spread: float = Field(..., description="해당 팀원에 대해 모델 간 최대-최소")
+    mean: float = Field(..., description="모델 간 평균 기여 지수")
+    dimension_spread: dict[str, float] = Field(
+        default_factory=dict,
+        description="팀원별 technical·collaboration·initiative 모델 간 편차(최대−최소)",
+    )
+
+
+class DivergenceAxisSummary(BaseModel):
+    """모델 간 의견이 갈리는 축(기여 지수·3차원)."""
+
+    axis_id: str = Field(..., description="contribution_index | technical | collaboration | initiative")
+    axis_label_ko: str
+    mean_spread: float = Field(..., description="팀원 전체에 대한 평균 편차")
+    max_spread_member: str = Field("", description="이 축에서 편차가 가장 큰 팀원")
+    interpretation: str = Field("", description="한 줄 해석")
+
+
+class OpinionDivergenceAnalysis(BaseModel):
+    """핵심1: AI 간 의견 차이 — 어떤 기준(축)에서 갈렸는지."""
+
+    primary_axes: list[DivergenceAxisSummary] = Field(default_factory=list)
+    criteria_segments: list[str] = Field(
+        default_factory=list,
+        description="입력 평가 기준을 잘라낸 문구(비교·설명용)",
+    )
+    criteria_keyword_overlap_note: str = Field(
+        "",
+        description="루브릭 키워드가 모델 근거 문장에 얼마나 등장했는지 요약",
+    )
+    narrative: str = Field("", description="종합 내러티브")
+
+
+class TrustScoreBlock(BaseModel):
+    """핵심2: 신뢰도 — 일관성·루브릭 일치·설명 품질(0–100)."""
+
+    consistency_0_100: float = Field(0, ge=0, le=100, description="모델 간 수치 일관성")
+    rubric_alignment_0_100: float = Field(0, ge=0, le=100, description="입력 평가 기준과 근거 문장의 키워드 정합")
+    explanation_quality_0_100: float = Field(0, ge=0, le=100, description="근거·주의 문장의 구체성·길이")
+    overall_trust_0_100: float = Field(0, ge=0, le=100, description="가중 평균 종합")
+    notes: list[str] = Field(default_factory=list, description="해석용 짧은 문장")
+
+
+class ExplainabilityEntry(BaseModel):
+    """핵심3: 설명 가능한 AI — 각 모델이 왜 그렇게 평가했는지."""
+
+    model_key: str
+    model_label: str
+    member_name: str
+    contribution_index: float
+    technical: float
+    collaboration: float
+    initiative: float
+    evidence_summary: str = Field("", description="모델이 제시한 근거")
+    caveats: str = Field("", description="모델이 제시한 주의·한계")
+    why_one_liner: str = Field(
+        "",
+        description="차원 점수+근거 앞부분을 묶은 한 줄 요약",
+    )
+
+
+class EvaluationPipelineStep(BaseModel):
+    """AI 멀티평가 처리 순서(STEP 1–6)."""
+
+    step: int = Field(..., ge=1, le=6)
+    title_ko: str = Field(..., description="단계 제목(고정 라벨)")
+    status: str = Field(
+        ...,
+        description="completed | skipped | partial",
+    )
+    detail: str = Field("", description="이번 요청에서의 실행 요약")
+
+
+class TeamCompareResponse(BaseModel):
+    """AI 멀티평가: 복수 모델 독립 평가 + 의견 차이·신뢰도·설명 가능성."""
+
+    request_id: str = ""
+    generated_at: str = ""
+    processing_ms: float = 0.0
+    product_mode: str = Field("ai_multi_eval", description="프론트·문서용 식별자")
+    pipeline_steps: list[EvaluationPipelineStep] = Field(
+        default_factory=list,
+        description="STEP1 데이터 수집 → … → STEP6 최종 점수·피드백",
+    )
+    models: list[ModelEvalBundle] = Field(default_factory=list)
+    member_comparison: list[MemberContributionCompare] = Field(default_factory=list)
+    comparison_summary: str = ""
+    divergence: OpinionDivergenceAnalysis | None = None
+    trust_scores: TrustScoreBlock | None = None
+    explainability: list[ExplainabilityEntry] = Field(default_factory=list)
+    disclaimer: str = (
+        "모델별 결과는 서로 다른 가중·해석을 가질 수 있습니다. 참고용이며 최종 판단은 교육자에게 있습니다."
+    )
+
+
+class MemberDashboardRow(BaseModel):
+    member_name: str
+    rank: int = Field(..., ge=1)
+    final_rule_score: float = Field(0.0, ge=0, le=100)
+    bar_fill_percent: float = Field(0.0, ge=0, le=100, description="막대 그래프 0–100")
+    grade_ko: str = ""
+    rule_conditions_met: int = 0
+    risk_level: str = ""
+    suspected_highlight: bool = False
+
+
+class RubricMemberRow(BaseModel):
+    """루브릭 4축(0–100) — 규칙·데이터 기반."""
+
+    member_name: str
+    contribution: float = Field(0, ge=0, le=100, description="기여도")
+    collaboration: float = Field(0, ge=0, le=100, description="협업 참여")
+    persistence: float = Field(0, ge=0, le=100, description="지속성·일관성")
+    problem_solving: float = Field(0, ge=0, le=100, description="문제 해결·기술·주도")
+
+
+class RubricReport(BaseModel):
+    team_average: RubricMemberRow = Field(
+        default_factory=lambda: RubricMemberRow(member_name="(팀 평균)"),
+    )
+    members: list[RubricMemberRow] = Field(default_factory=list)
+    criteria_note: str = ""
+    ai_explanation: str = Field("", description="선택: 루브릭 기준 설명(AI는 해석만)")
+
+
+class EvaluationTrustBlock(BaseModel):
+    """평가 결과 신뢰도 — 휴리스틱."""
+
+    score_0_100: float = Field(0, ge=0, le=100)
+    level_ko: str = Field("", description="높음 | 중간 | 낮음")
+    factors: list[str] = Field(default_factory=list)
+    short_note: str = ""
+
+
+class TeamRiskBlock(BaseModel):
+    """팀 단위 리스크."""
+
+    flags: list[str] = Field(default_factory=list)
+    summary_ko: str = ""
+    ai_team_risk: str = Field("", description="선택: 팀 리스크 AI 한 문단")
+
+
+class ImprovementChainItem(BaseModel):
+    problem: str = ""
+    explanation: str = ""
+    suggestion: str = ""
+    predicted_outcome: str = ""
+
+
+class ImprovementChainBlock(BaseModel):
+    headline: str = ""
+    items: list[ImprovementChainItem] = Field(default_factory=list)
+
+
 class TeamEvaluateResponse(BaseModel):
     mode: str
     members: list[MemberOut]
@@ -227,6 +439,34 @@ class TeamEvaluateResponse(BaseModel):
     disclaimer: str = (
         "팀 프로젝트 기여도 자동 평가(보조) 결과입니다. 최종 성적·인사 판단을 대체하지 않습니다. "
         "무임승차·불일치·네트워크·이상 탐지는 추정이며 면담·추가 증거로 확인하세요."
+    )
+    freerider_detection_overview: str = Field(
+        "",
+        description="무임승차 4단계 탐지 팀 요약",
+    )
+    product_tagline_ko: str = Field(
+        "",
+        description="심사용: 계산=데이터·규칙, AI=해석·설명·개선 제안",
+    )
+    team_dashboard: list[MemberDashboardRow] = Field(
+        default_factory=list,
+        description="팀 대시보드: 순위·막대·등급 표시용",
+    )
+    rubric_report: RubricReport = Field(
+        default_factory=RubricReport,
+        description="루브릭 4축(기여·협업·지속성·문제해결) — 규칙 기반",
+    )
+    evaluation_trust: EvaluationTrustBlock = Field(
+        default_factory=EvaluationTrustBlock,
+        description="데이터 충분성·일관성·협업 정보 기반 신뢰도",
+    )
+    team_risk: TeamRiskBlock = Field(
+        default_factory=TeamRiskBlock,
+        description="팀 전체 리스크(편중·의존·협업 부족 등)",
+    )
+    improvement_chain: ImprovementChainBlock = Field(
+        default_factory=ImprovementChainBlock,
+        description="문제→설명→개선→기대효과",
     )
 
 
@@ -656,7 +896,7 @@ def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_ke
 
     client = get_openai_client(api_key)
     res = client.chat.completions.create(
-        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
         messages=[
             {"role": "system", "content": sys},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -679,6 +919,8 @@ def _finalize_members(
     contribution_indices: list[float],
     mode: str,
     fairness_notes: str = "",
+    *,
+    enrich_openai: bool = True,
 ) -> TeamEvaluateResponse:
     timelines = _merge_timelines(req, contribution_indices)
     suspected, risks, sigs = _free_rider_analysis(req, contribution_indices, timelines)
@@ -703,18 +945,48 @@ def _finalize_members(
     )
 
     out_members, net, mm, anom, co_summary = _advanced_sync(req, enriched, suspected)
+
+    from edu_tools.team_freerider import (
+        PRODUCT_TAGLINE_KO,
+        build_team_dashboard,
+        compute_freerider_reports,
+        freerider_detection_overview,
+        safe_freerider_ai_summaries,
+    )
+    from edu_tools.team_contest_layers import build_contest_layers
+
+    fr_reports = compute_freerider_reports(req, out_members, timelines, net)
+    out_members = [
+        out_members[i].model_copy(update={"freerider_detection": fr_reports[i]})
+        for i in range(len(out_members))
+    ]
+    fr_overview = freerider_detection_overview(out_members)
+
     key = (os.environ.get("OPENAI_API_KEY") or "").strip()
     adv_mode = "heuristic"
 
-    if key:
-        # 팀원 피드백 생성과 고급 해설 보강을 병렬로 실행해 지연 시간 단축
-        with ThreadPoolExecutor(max_workers=2) as pool:
+    if enrich_openai and key:
+        # 피드백·불일치 해설·무임승차 4단계 AI 요약을 병렬 실행
+        with ThreadPoolExecutor(max_workers=3) as pool:
             fut_fb = pool.submit(_safe_openai_feedbacks, req, enriched, key)
             fut_en = pool.submit(_try_openai_enrich, req, out_members, co_summary, key)
+            fut_fr = pool.submit(safe_freerider_ai_summaries, req, out_members, key)
             fbs = fut_fb.result()
             co_summary, adv_mode = fut_en.result()
+            fr_ai = fut_fr.result()
         out_members = [
-            out_members[i].model_copy(update={"ai_feedback": fbs[i]})
+            out_members[i].model_copy(
+                update={
+                    "ai_feedback": fbs[i],
+                    "freerider_detection": out_members[i].freerider_detection.model_copy(
+                        update={
+                            "ai_detection_summary": fr_ai[i]
+                            if i < len(fr_ai)
+                            else ""
+                        }
+                    ),
+                }
+            )
             for i in range(len(out_members))
         ]
     else:
@@ -722,6 +994,9 @@ def _finalize_members(
             out_members[i].model_copy(update={"ai_feedback": _template_feedback(out_members[i])})
             for i in range(len(out_members))
         ]
+
+    team_dashboard = build_team_dashboard(out_members)
+    rubric_rep, trust_blk, risk_blk, improve_blk = build_contest_layers(req, out_members, net)
 
     creative = _build_creative_insights(req, out_members, mm, anom)
     practical = _build_practical_toolkit(out_members, mm, anom)
@@ -738,6 +1013,13 @@ def _finalize_members(
         advanced_mode=adv_mode,
         creative_insights=creative,
         practical_toolkit=practical,
+        freerider_detection_overview=fr_overview,
+        product_tagline_ko=PRODUCT_TAGLINE_KO,
+        team_dashboard=team_dashboard,
+        rubric_report=rubric_rep,
+        evaluation_trust=trust_blk,
+        team_risk=risk_blk,
+        improvement_chain=improve_blk,
     )
 
 
@@ -823,7 +1105,7 @@ def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse
 
     client = get_openai_client(api_key)
     res = client.chat.completions.create(
-        model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.environ.get("OPENAI_MODEL", "gpt-4o"),
         messages=[
             {"role": "system", "content": sys},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -874,6 +1156,27 @@ def _stamp_team_response(resp: TeamEvaluateResponse, request_id: str, t0: float)
             "processing_ms": round(ms, 2),
         }
     )
+
+
+def _stamp_compare_response(resp: TeamCompareResponse, request_id: str, t0: float) -> TeamCompareResponse:
+    ms = (time.perf_counter() - t0) * 1000
+    return resp.model_copy(
+        update={
+            "request_id": request_id,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "processing_ms": round(ms, 2),
+        }
+    )
+
+
+@router.post("/evaluate/compare", response_model=TeamCompareResponse)
+async def evaluate_team_compare(body: TeamEvaluateRequest) -> TeamCompareResponse:
+    """ChatGPT·Gemini·Claude·Grok 최신(기본) 모델 각각 독립 평가 후 기여 지수 비교."""
+    request_id = str(uuid.uuid4())
+    t0 = time.perf_counter()
+    from edu_tools.team_multi_llm import run_team_compare
+
+    return _stamp_compare_response(run_team_compare(body), request_id, t0)
 
 
 @router.post("/evaluate", response_model=TeamEvaluateResponse)

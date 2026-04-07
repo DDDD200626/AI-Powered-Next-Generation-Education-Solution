@@ -149,6 +149,23 @@ def test_team_evaluate_heuristic_has_creative_insights() -> None:
     assert r.status_code == 200
     data = r.json()
     assert len(data["members"]) == 2
+    assert data.get("freerider_detection_overview")
+    assert "product_tagline_ko" in data
+    assert isinstance(data.get("team_dashboard"), list)
+    assert len(data["team_dashboard"]) == 2
+    assert "member_name" in data["team_dashboard"][0]
+    assert "freerider_detection" in data["members"][0]
+    fd0 = data["members"][0]["freerider_detection"]
+    assert "basic_low_contribution" in fd0
+    assert "rule_metrics" in fd0
+    assert fd0["rule_metrics"] is not None
+    assert "rubric_report" in data
+    assert data["rubric_report"]["members"]
+    assert "evaluation_trust" in data
+    assert data["evaluation_trust"]["level_ko"]
+    assert "team_risk" in data
+    assert "improvement_chain" in data
+    assert data["improvement_chain"]["items"]
     assert "creative_insights" in data
     ci = data["creative_insights"]
     assert ci["reflection_kit"]["team_storyline"]
@@ -159,5 +176,51 @@ def test_team_evaluate_heuristic_has_creative_insights() -> None:
     assert "practical_toolkit" in data
     pt = data["practical_toolkit"]
     assert len(pt["teacher_checklist"]) >= 3
+    assert "request_id" in data
+    assert r.headers.get("X-Request-ID")
+
+
+def test_team_evaluate_compare_no_api_keys_returns_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """키가 없을 때도 비교 엔드포인트는 200 + 모델별 오류 메시지로 응답."""
+    for k in (
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "XAI_API_KEY",
+        "GROK_API_KEY",
+    ):
+        monkeypatch.delenv(k, raising=False)
+    body = {
+        "project_name": "비교 테스트",
+        "project_description": "",
+        "evaluation_criteria": "",
+        "members": [
+            {
+                "name": "A",
+                "role": "",
+                "commits": 5,
+                "pull_requests": 1,
+                "lines_changed": 100,
+                "tasks_completed": 2,
+                "meetings_attended": 2,
+                "self_report": "",
+                "peer_notes": "",
+                "timeline": [],
+            },
+        ],
+        "collaboration_edges": [],
+    }
+    r = client.post("/api/team/evaluate/compare", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    assert "models" in data
+    assert len(data["models"]) >= 1
+    assert data.get("comparison_summary")
+    assert data.get("product_mode") == "ai_multi_eval"
+    assert len(data.get("pipeline_steps") or []) == 6
+    assert data.get("divergence") is None
+    assert data.get("trust_scores") is None
+    assert data.get("explainability") == []
     assert "request_id" in data
     assert r.headers.get("X-Request-ID")

@@ -2,6 +2,29 @@
 
 팀 단위 과제에서 **정량·서술·주차별 활동**을 입력하면 **기여 지수**, **무임승차 의심**, **기여도 타임라인**, **팀원별 AI 피드백**을 자동 생성하는 **교육 보조** 웹·API입니다. 출력은 **참고용**이며 최종 평가·징계를 대체하지 않습니다.
 
+## 방법 A — 백엔드 + 웹 같이 (개발용, 추천)
+
+### Windows: 스크립트로 한 번에
+
+저장소 **루트**에서:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
+npm run dev
+```
+
+- 웹: http://127.0.0.1:5173  
+- API 문서: http://127.0.0.1:8000/docs  
+
+### ClassPulse(Streamlit)까지 설치하려면
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -WithClassPulse
+streamlit run classpulse/app.py
+```
+
+(`npm run classpulse` — 같은 Python에 streamlit이 깔린 경우)
+
 ## 공모전·심사 제출용 (4개 기준 한눈에)
 
 | 심사 항목 | 한 줄 요약 | 바로가기 |
@@ -49,9 +72,9 @@ docker compose up --build
 
 API에 Gemini·OpenAI 등 키를 넣으려면 `backend/.env`를 만들고(`.env.example` 참고) `docker compose`에 `env_file`을 추가하거나, `api` 서비스에 환경 변수를 주입하세요.
 
-## 한 번에 실행 (백엔드 + 프론트)
+## 한 번에 실행 (백엔드 + 프론트) = 방법 A
 
-저장소 **루트**에서 (Python 의존성은 먼저 한 번 설치):
+저장소 **루트**에서 (Python·Node 의존성을 먼저 한 번 설치):
 
 ```bash
 cd backend
@@ -59,6 +82,7 @@ pip install -r requirements.txt
 copy .env.example .env
 cd ..
 npm install
+npm run install:all
 npm run dev
 ```
 

@@ -1,0 +1,12 @@
+■ 개발 중(가장 흔함) — Docker 없이
+  1) 프로젝트 루트에서: npm run dev
+     (또는 백엔드만 이미 켜져 있으면: npm run dev:frontend)
+  2) 브라우저 주소:
+       http://localhost:5173
+  3) 바로가기 open-site.url / open-local-site.html → 위 주소와 동일
+
+■ Docker 쓸 때(웹 8080, npm 불필요)
+  docker compose up -d --build  (또는 start-docker.bat)
+  → http://localhost:8080
+
+  API 문서: http://127.0.0.1:8000/docs
