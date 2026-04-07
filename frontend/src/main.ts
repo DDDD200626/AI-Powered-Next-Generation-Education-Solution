@@ -19,6 +19,32 @@ function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** 백엔드 `/api/health` — 한 번의 요청으로 버전·제공자 확인 */
+interface BackendHealth {
+  providers?: ProviderKeys;
+  version?: string;
+  app_name?: string;
+  openapi_docs?: string;
+}
+
+let lastHealthFetchedAt = 0;
+let lastHealthAttemptAt = 0;
+const HEALTH_CACHE_MS = 5000;
+const HEALTH_RETRY_MS = 4000;
+
+/** GET 기본 12s / POST·LLM 180s — 무한 대기 방지 */
+function apiFetch(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<Response> {
+  const url = path.startsWith("http") ? path : apiUrl(path);
+  const timeoutMs =
+    init?.timeoutMs ?? (!init?.method || init.method === "GET" ? 12_000 : 180_000);
+  const ctrl = new AbortController();
+  const tid = window.setTimeout(() => ctrl.abort(), timeoutMs);
+  const { timeoutMs: _ignore, ...rest } = init ?? {};
+  return fetch(url, { ...rest, signal: ctrl.signal }).finally(() => {
+    clearTimeout(tid);
+  });
+}
+
 type SiteView =
   | "hub"
   | "analyze"
@@ -235,6 +261,19 @@ interface RubricAlignResponse {
   disclaimer?: string;
 }
 
+interface RubricCriterionGen {
+  name: string;
+  description: string;
+  weight_percent: number;
+}
+
+interface RubricGenerateResponse {
+  mode: string;
+  rubric_markdown: string;
+  criteria: RubricCriterionGen[];
+  disclaimer?: string;
+}
+
 interface LLMTextResult {
   provider: string;
   model_label: string;
@@ -335,6 +374,16 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function downloadJsonExport(filenameBase: string, data: unknown): void {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+  const safe = filenameBase.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${safe}-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 const state: {
   view: SiteView;
   course_name: string;
@@ -354,7 +403,7 @@ const state: {
   result: AnalyzeResponse | null;
   loading: boolean;
   error: string | null;
-  health: { providers?: ProviderKeys } | null;
+  health: BackendHealth | null;
   team: {
     project_name: string;
     project_description: string;
@@ -403,6 +452,15 @@ const state: {
     grader_rationale: string;
     student_work: string;
     result: RubricAlignResponse | null;
+    loading: boolean;
+    error: string | null;
+  };
+  rubricGen: {
+    course_name: string;
+    learning_objectives: string;
+    assignment_type: string;
+    max_criteria: string;
+    result: RubricGenerateResponse | null;
     loading: boolean;
     error: string | null;
   };
@@ -484,6 +542,15 @@ const state: {
     loading: false,
     error: null,
   },
+  rubricGen: {
+    course_name: "",
+    learning_objectives: "",
+    assignment_type: "",
+    max_criteria: "5",
+    result: null,
+    loading: false,
+    error: null,
+  },
   llmCompare: {
     task_title: "",
     system_hint: "",
@@ -510,6 +577,7 @@ function parseOptInt(s: string): number | null {
 
 const TEAM_DRAFT_KEY = "team_eval_draft_v2";
 let teamDraftTimer: ReturnType<typeof setTimeout> | null = null;
+let teamSimRafId = 0;
 
 function scheduleTeamDraftSave(): void {
   if (state.view !== "team") return;
@@ -615,10 +683,19 @@ function teamExportSummaryText(res: TeamEvaluateResponse): string {
   return lines.join("\n");
 }
 
-async function refreshHealth(): Promise<void> {
+async function refreshHealth(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && state.health && now - lastHealthFetchedAt < HEALTH_CACHE_MS) return;
+  if (!force && !state.health && now - lastHealthAttemptAt < HEALTH_RETRY_MS) return;
+  lastHealthAttemptAt = now;
   try {
-    const r = await fetch(apiUrl("/api/health"));
-    state.health = (await r.json()) as { providers?: ProviderKeys };
+    const r = await apiFetch("/api/health", { timeoutMs: 10_000 });
+    if (!r.ok) {
+      state.health = null;
+      return;
+    }
+    state.health = (await r.json()) as BackendHealth;
+    lastHealthFetchedAt = Date.now();
   } catch {
     state.health = null;
   }
@@ -629,7 +706,7 @@ async function submitAnalyze(): Promise<void> {
   state.error = null;
   state.result = null;
   state.loading = true;
-  render();
+  renderSync();
 
   const body = {
     course_name: state.course_name.trim(),
@@ -653,7 +730,7 @@ async function submitAnalyze(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/analyze"), {
+    const r = await apiFetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -664,7 +741,7 @@ async function submitAnalyze(): Promise<void> {
       state.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.result = data;
@@ -674,7 +751,7 @@ async function submitAnalyze(): Promise<void> {
   } finally {
     state.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readTeamForm(): void {
@@ -706,7 +783,7 @@ async function submitTeam(): Promise<void> {
   state.team.error = null;
   state.team.result = null;
   state.team.loading = true;
-  render();
+  renderSync();
 
   const members = state.team.members
     .filter((m) => m.name.trim())
@@ -739,7 +816,7 @@ async function submitTeam(): Promise<void> {
   if (!state.team.project_name.trim() || members.length === 0) {
     state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
     state.team.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -762,7 +839,7 @@ async function submitTeam(): Promise<void> {
     } catch {
       state.team.error = "협업 네트워크 JSON 형식이 올바르지 않습니다. 예: [{\"source\":\"A\",\"target\":\"B\",\"weight\":40}]";
       state.team.loading = false;
-      render();
+      renderSync();
       return;
     }
   }
@@ -776,7 +853,7 @@ async function submitTeam(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/team/evaluate"), {
+    const r = await apiFetch("/api/team/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -787,7 +864,7 @@ async function submitTeam(): Promise<void> {
       state.team.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.team.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.team.result = data;
@@ -797,7 +874,7 @@ async function submitTeam(): Promise<void> {
   } finally {
     state.team.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readAtRiskForm(): void {
@@ -817,7 +894,7 @@ async function submitAtRisk(): Promise<void> {
   state.atRisk.error = null;
   state.atRisk.result = null;
   state.atRisk.loading = true;
-  render();
+  renderSync();
 
   const weeks = state.atRisk.weeks
     .filter((w) => w.week_label.trim())
@@ -837,7 +914,7 @@ async function submitAtRisk(): Promise<void> {
   if (weeks.length === 0) {
     state.atRisk.error = "주차 라벨과 참여 점수(0–100)를 한 줄 이상 입력하세요.";
     state.atRisk.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -849,7 +926,7 @@ async function submitAtRisk(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/at-risk/evaluate"), {
+    const r = await apiFetch("/api/at-risk/evaluate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -860,7 +937,7 @@ async function submitAtRisk(): Promise<void> {
       state.atRisk.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.atRisk.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.atRisk.result = data;
@@ -869,7 +946,7 @@ async function submitAtRisk(): Promise<void> {
   } finally {
     state.atRisk.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readFeedbackForm(): void {
@@ -884,12 +961,12 @@ async function submitFeedback(): Promise<void> {
   state.feedback.error = null;
   state.feedback.result = null;
   state.feedback.loading = true;
-  render();
+  renderSync();
 
   if (!state.feedback.rubric.trim() || !state.feedback.submission.trim()) {
     state.feedback.error = "루브릭과 제출물을 입력하세요.";
     state.feedback.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -900,7 +977,7 @@ async function submitFeedback(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/feedback/draft"), {
+    const r = await apiFetch("/api/feedback/draft", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -915,7 +992,7 @@ async function submitFeedback(): Promise<void> {
             ? String((d as { detail: string }).detail)
             : "요청 실패";
       state.feedback.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.feedback.result = data;
@@ -924,7 +1001,7 @@ async function submitFeedback(): Promise<void> {
   } finally {
     state.feedback.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readSyllabusForm(): void {
@@ -939,14 +1016,14 @@ async function submitSyllabus(): Promise<void> {
   state.syllabus.error = null;
   state.syllabus.result = null;
   state.syllabus.loading = true;
-  render();
+  renderSync();
 
   const text = state.syllabus.syllabus_text.trim();
   const q = state.syllabus.question.trim();
   if (text.length < 20 || q.length < 2) {
     state.syllabus.error = "안내 문구는 20자 이상, 질문은 2자 이상 입력하세요.";
     state.syllabus.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -957,7 +1034,7 @@ async function submitSyllabus(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/course/ask"), {
+    const r = await apiFetch("/api/course/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -968,7 +1045,7 @@ async function submitSyllabus(): Promise<void> {
       state.syllabus.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.syllabus.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.syllabus.result = data;
@@ -977,7 +1054,7 @@ async function submitSyllabus(): Promise<void> {
   } finally {
     state.syllabus.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readDiscussionForm(): void {
@@ -994,7 +1071,7 @@ async function submitDiscussion(): Promise<void> {
   state.discussion.error = null;
   state.discussion.result = null;
   state.discussion.loading = true;
-  render();
+  renderSync();
 
   const posts = state.discussion.posts
     .filter((p) => p.text.trim())
@@ -1006,7 +1083,7 @@ async function submitDiscussion(): Promise<void> {
   if (posts.length === 0) {
     state.discussion.error = "최소 한 게시글 본문을 입력하세요.";
     state.discussion.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -1016,7 +1093,7 @@ async function submitDiscussion(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/discussion/synthesize"), {
+    const r = await apiFetch("/api/discussion/synthesize", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1027,7 +1104,7 @@ async function submitDiscussion(): Promise<void> {
       state.discussion.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.discussion.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.discussion.result = data;
@@ -1036,7 +1113,7 @@ async function submitDiscussion(): Promise<void> {
   } finally {
     state.discussion.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readRubricAlignForm(): void {
@@ -1046,17 +1123,75 @@ function readRubricAlignForm(): void {
   state.rubricAlign.student_work = g("ra_student")?.value ?? "";
 }
 
+function readRubricGenForm(): void {
+  const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
+  state.rubricGen.course_name = g("rg_course")?.value ?? "";
+  state.rubricGen.learning_objectives = g("rg_objectives")?.value ?? "";
+  state.rubricGen.assignment_type = g("rg_assignment")?.value ?? "";
+  state.rubricGen.max_criteria = g("rg_max_criteria")?.value ?? "5";
+}
+
+async function submitRubricGenerate(): Promise<void> {
+  readRubricGenForm();
+  state.rubricGen.error = null;
+  state.rubricGen.result = null;
+  state.rubricGen.loading = true;
+  renderSync();
+
+  const obj = state.rubricGen.learning_objectives.trim();
+  if (obj.length < 10) {
+    state.rubricGen.error = "학습 목표를 10자 이상 입력하세요.";
+    state.rubricGen.loading = false;
+    renderSync();
+    return;
+  }
+
+  let maxC = parseInt(state.rubricGen.max_criteria.trim(), 10);
+  if (!Number.isFinite(maxC)) maxC = 5;
+  maxC = Math.min(8, Math.max(3, maxC));
+
+  const body = {
+    course_name: state.rubricGen.course_name.trim(),
+    assignment_type: state.rubricGen.assignment_type.trim(),
+    learning_objectives: obj,
+    max_criteria: maxC,
+  };
+
+  try {
+    const r = await apiFetch("/api/rubric/draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as RubricGenerateResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.rubricGen.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.rubricGen.loading = false;
+      renderSync();
+      return;
+    }
+    state.rubricGen.result = data;
+  } catch (e) {
+    state.rubricGen.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.rubricGen.loading = false;
+  }
+  renderSync();
+}
+
 async function submitRubricAlign(): Promise<void> {
   readRubricAlignForm();
   state.rubricAlign.error = null;
   state.rubricAlign.result = null;
   state.rubricAlign.loading = true;
-  render();
+  renderSync();
 
   if (!state.rubricAlign.rubric.trim() || !state.rubricAlign.grader_rationale.trim()) {
     state.rubricAlign.error = "루브릭과 채점 근거를 입력하세요.";
     state.rubricAlign.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -1067,7 +1202,7 @@ async function submitRubricAlign(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/rubric/check"), {
+    const r = await apiFetch("/api/rubric/check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1078,7 +1213,7 @@ async function submitRubricAlign(): Promise<void> {
       state.rubricAlign.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.rubricAlign.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.rubricAlign.result = data;
@@ -1087,7 +1222,7 @@ async function submitRubricAlign(): Promise<void> {
   } finally {
     state.rubricAlign.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function readLlmCompareForm(): void {
@@ -1102,13 +1237,13 @@ async function submitLlmCompare(): Promise<void> {
   state.llmCompare.error = null;
   state.llmCompare.result = null;
   state.llmCompare.loading = true;
-  render();
+  renderSync();
 
   const p = state.llmCompare.prompt.trim();
   if (!p) {
     state.llmCompare.error = "분석할 내용을 입력하세요.";
     state.llmCompare.loading = false;
-    render();
+    renderSync();
     return;
   }
 
@@ -1119,7 +1254,7 @@ async function submitLlmCompare(): Promise<void> {
   };
 
   try {
-    const r = await fetch(apiUrl("/api/llm/compare"), {
+    const r = await apiFetch("/api/llm/compare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1130,7 +1265,7 @@ async function submitLlmCompare(): Promise<void> {
       state.llmCompare.error =
         typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
       state.llmCompare.loading = false;
-      render();
+      renderSync();
       return;
     }
     state.llmCompare.result = data;
@@ -1139,15 +1274,23 @@ async function submitLlmCompare(): Promise<void> {
   } finally {
     state.llmCompare.loading = false;
   }
-  render();
+  renderSync();
 }
 
 function providerPills(): string {
   const p = state.health?.providers;
-  if (!p) return '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
+  const ver = state.health?.version;
+  const verPill = ver ? `<span class="pill pill-muted">API v${escapeHtml(ver)}</span>` : "";
   const mk = (name: string, on: boolean | undefined) =>
     `<span class="pill ${on ? "pill-on" : "pill-off"}">${name}</span>`;
-  return [mk("Gemini", p.gemini), mk("ChatGPT", p.openai), mk("Claude", p.claude), mk("Grok", p.grok)].join("");
+  if (!p) {
+    return verPill
+      ? `${verPill} <span class="pill pill-muted">제공자 확인 중…</span>`
+      : '<span class="pill pill-muted">백엔드 연결 확인 중…</span>';
+  }
+  return [verPill, mk("Gemini", p.gemini), mk("ChatGPT", p.openai), mk("Claude", p.claude), mk("Grok", p.grok)]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function navHtml(): string {
@@ -1169,11 +1312,17 @@ function navHtml(): string {
 }
 
 function footerHtml(): string {
+  const docsHref = API_BASE ? `${API_BASE}/docs` : "/docs";
+  const apiMeta =
+    state.health?.version != null
+      ? ` · <a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI ${escapeHtml(state.health.version)}</a>`
+      : ` · <a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI</a>`;
   return `
   <footer class="site-footer">
     <div class="footer-inner">
       <p class="footer-line">
         <a href="${REPO_URL}" target="_blank" rel="noopener noreferrer">저장소</a>
+        ${apiMeta}
         · 교육 보조 도구이며 징계·단정에 사용할 수 없습니다.
       </p>
       <p class="footer-muted">팀 프로젝트 기여도 자동 평가 시스템 — 교육 보조·참고용</p>
@@ -1270,8 +1419,8 @@ function hubHtml(): string {
         </article>
         <article class="solution-tile solution-tile--live hud-card">
           <span class="solution-badge solution-badge--on">공정성</span>
-          <h3>루브릭·채점 근거 일치</h3>
-          <p>루브릭과 채점 코멘트를 비교해 정합성 점수와 개선 힌트를 봅니다.</p>
+          <h3>루브릭 초안·채점 정합성</h3>
+          <p>학습 목표로 루브릭 초안을 만들거나, 기존 루브릭과 채점 코멘트의 일치를 점검합니다.</p>
           <button type="button" class="btn btn-primary btn-block" data-view="rubric">열기</button>
         </article>
       </div>
@@ -1587,7 +1736,16 @@ function teamSimulatorHtml(): string {
   </section>`;
 }
 
+/** 슬라이더·셀렉트 입력을 rAF로 합쳐 레이아웃 부담 완화 */
 function updateTeamSimDisplay(): void {
+  if (teamSimRafId) return;
+  teamSimRafId = requestAnimationFrame(() => {
+    teamSimRafId = 0;
+    updateTeamSimDisplayImpl();
+  });
+}
+
+function updateTeamSimDisplayImpl(): void {
   readTeamForm();
   const sel = document.getElementById("team-sim-member") as HTMLSelectElement | null;
   const range = document.getElementById("team-sim-extra") as HTMLInputElement | null;
@@ -1992,6 +2150,31 @@ function llmProviderLabel(provider: string): string {
   return m[provider] || provider;
 }
 
+function rubricGenResultHtml(): string {
+  const r = state.rubricGen.result;
+  if (!r) return "";
+  const rows = r.criteria
+    .map(
+      (c) =>
+        `<tr><td>${escapeHtml(c.name)}</td><td class="muted small">${escapeHtml(c.description)}</td><td>${c.weight_percent.toFixed(1)}%</td></tr>`
+    )
+    .join("");
+  return `
+  <section class="panel panel-result hud-panel">
+    <div class="result-toolbar no-print" role="toolbar" aria-label="루브릭 초안 내보내기">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-rg-export-json">JSON 내보내기</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-rg-copy-md">마크다운 복사</button>
+    </div>
+    <h2>루브릭 초안 <span class="pill ${r.mode === "ai" ? "pill-on" : "pill-muted"}">${escapeHtml(r.mode)}</span></h2>
+    <div class="table-scroll-wrap">
+      <table class="data-table"><thead><tr><th>항목</th><th>기준</th><th>배점</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+    <h3 class="subh">마크다운 전문</h3>
+    <pre class="rubric-md-preview mono-input">${escapeHtml(r.rubric_markdown)}</pre>
+    <p class="footer-note muted small">${escapeHtml(r.disclaimer || "")}</p>
+  </section>`;
+}
+
 function llmCompareHtml(): string {
   const r = state.llmCompare.result;
   const skippedHtml =
@@ -2016,6 +2199,9 @@ function llmCompareHtml(): string {
   const resultBlock = r
     ? `
   <section class="panel panel-result hud-panel" id="llm-results">
+    <div class="result-toolbar no-print" role="toolbar" aria-label="결과 내보내기">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-llm-export-json">JSON 내보내기</button>
+    </div>
     <h2>모델별 응답</h2>
     ${skippedHtml}
     <div class="card-grid">${cards}</div>
@@ -2066,8 +2252,31 @@ function rubricAlignHtml(): string {
   <div class="page page-animate analyze-page">
     <p class="eyebrow">채점 품질</p>
     <h1 class="page-title">루브릭·채점 근거 일치 점검</h1>
-    <p class="lead analyze-lead">동일 과제의 루브릭과 채점자 코멘트를 넣으세요. OpenAI가 있으면 의미 분석, 없으면 단어 겹침만 봅니다.</p>
+    <p class="lead analyze-lead">학습 목표에서 <strong>루브릭 초안</strong>을 만들거나, 기존 루브릭과 채점 코멘트의 <strong>정합성</strong>을 점검할 수 있습니다. OpenAI가 있으면 서술 품질이 올라갑니다.</p>
     <section class="panel hud-panel">
+      <h4 class="subh">1) 학습 목표 → 루브릭 초안</h4>
+      <div class="grid-2">
+        <div><label class="lbl">과목명 (선택)</label><input class="txt" id="rg_course" value="${escapeHtml(state.rubricGen.course_name)}" placeholder="예: 소프트웨어공학" /></div>
+        <div><label class="lbl">과제 유형 (선택)</label><input class="txt" id="rg_assignment" value="${escapeHtml(state.rubricGen.assignment_type)}" placeholder="팀 프로젝트, 보고서…" /></div>
+      </div>
+      <div class="grid-2">
+        <div>
+          <label class="lbl">항목 수 (3–8)</label>
+          <input class="txt" id="rg_max_criteria" type="number" min="3" max="8" step="1" value="${escapeHtml(state.rubricGen.max_criteria)}" />
+        </div>
+      </div>
+      <label class="lbl">학습 목표·성과 목표 (10자 이상)</label>
+      <textarea class="txt" id="rg_objectives" rows="5" placeholder="예: REST API 설계·문서화, 보안·오류 처리 등">${escapeHtml(state.rubricGen.learning_objectives)}</textarea>
+      <div class="row-actions">
+        <button type="button" class="btn btn-primary" id="btn-rg-run" ${state.rubricGen.loading ? "disabled" : ""}>
+          ${state.rubricGen.loading ? "생성 중…" : "루브릭 초안 생성"}
+        </button>
+      </div>
+      ${state.rubricGen.error ? `<p class="err">${escapeHtml(state.rubricGen.error)}</p>` : ""}
+    </section>
+    ${rubricGenResultHtml()}
+    <section class="panel hud-panel">
+      <h4 class="subh">2) 루브릭·채점 근거 정합성 점검</h4>
       <label class="lbl">루브릭 전문</label>
       <textarea class="txt" id="ra_rubric" rows="6">${escapeHtml(state.rubricAlign.rubric)}</textarea>
       <label class="lbl">채점 근거·코멘트</label>
@@ -2123,6 +2332,9 @@ function resultSectionHtml(): string {
       : "";
   return `
   <section class="panel panel-result hud-panel" id="results">
+    <div class="result-toolbar no-print" role="toolbar" aria-label="결과 내보내기">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-analyze-export-json">JSON 내보내기</button>
+    </div>
     <h2>분석 결과</h2>
     <p class="prose">${escapeHtml(res.consensus_summary)}</p>
     ${avg}
@@ -2236,7 +2448,14 @@ function mainContentHtml(): string {
   }
 }
 
-function render(): void {
+let renderRafId = 0;
+
+/** 즉시 DOM 반영 — 로딩 표시·비동기 완료 후에는 이쪽(다음 프레임 지연 없음) */
+function renderSync(): void {
+  if (renderRafId) {
+    cancelAnimationFrame(renderRafId);
+    renderRafId = 0;
+  }
   const app = document.getElementById("app");
   if (!app) return;
   app.innerHTML = `
@@ -2246,6 +2465,15 @@ function render(): void {
     ${footerHtml()}
   </div>`;
   wire();
+}
+
+/** 동기 스택에서 연속 호출 시 한 프레임으로 합쳐 reflow 비용 절감 */
+function render(): void {
+  if (renderRafId) return;
+  renderRafId = requestAnimationFrame(() => {
+    renderRafId = 0;
+    renderSync();
+  });
 }
 
 function readForm(): void {
@@ -2287,6 +2515,7 @@ function setView(v: SiteView): void {
   }
   if (state.view === "rubric") {
     readRubricAlignForm();
+    readRubricGenForm();
   }
   if (state.view === "llm") {
     readLlmCompareForm();
@@ -2296,7 +2525,7 @@ function setView(v: SiteView): void {
     hydrateTeamDraftIfEmpty();
   }
   void refreshHealth().then(() => {
-    render();
+    renderSync();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
 }
@@ -2426,9 +2655,45 @@ function wire(): void {
     void submitRubricAlign();
   });
 
+  document.getElementById("btn-rg-run")?.addEventListener("click", () => {
+    void submitRubricGenerate();
+  });
+
+  document.getElementById("btn-rg-export-json")?.addEventListener("click", () => {
+    const x = state.rubricGen.result;
+    if (!x) return;
+    downloadJsonExport("rubric-draft", x);
+  });
+
+  document.getElementById("btn-rg-copy-md")?.addEventListener("click", async () => {
+    const x = state.rubricGen.result;
+    if (!x) return;
+    try {
+      await navigator.clipboard.writeText(x.rubric_markdown);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  document.getElementById("btn-analyze-export-json")?.addEventListener("click", () => {
+    if (!state.result) return;
+    downloadJsonExport("analyze-learning-exam", state.result);
+  });
+
+  document.getElementById("btn-llm-export-json")?.addEventListener("click", () => {
+    if (!state.llmCompare.result) return;
+    downloadJsonExport("llm-compare", state.llmCompare.result);
+  });
+
   document.getElementById("btn-llm-run")?.addEventListener("click", () => {
     void submitLlmCompare();
   });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      void refreshHealth(true).then(() => renderSync());
+    }
+  });
 }
 
-void refreshHealth().then(() => render());
+void refreshHealth(true).then(() => renderSync());

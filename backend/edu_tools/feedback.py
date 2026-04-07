@@ -7,6 +7,8 @@ import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from learning_analysis.llm_clients import get_openai_client
+
 router = APIRouter()
 
 
@@ -32,9 +34,7 @@ async def draft_feedback(body: FeedbackRequest) -> FeedbackResponse:
             status_code=503,
             detail="피드백 초안 생성에는 OPENAI_API_KEY가 필요합니다.",
         )
-    from openai import OpenAI
-
-    client = OpenAI(api_key=key)
+    client = get_openai_client(key)
     sys = """당신은 대학 조교입니다. 루브릭에 맞춰 과제 피드백 초안을 한국어로 작성합니다.
 JSON만 출력하세요.
 {

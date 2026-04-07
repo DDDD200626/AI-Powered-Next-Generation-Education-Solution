@@ -15,6 +15,8 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from learning_analysis.llm_clients import get_openai_client
+
 from edu_tools.team_advanced import (
     AnomalyAlert,
     CollaborationEdgeIn,
@@ -625,16 +627,6 @@ def _try_openai_enrich(
     return summary, "heuristic"
 
 
-def _openai_timeout_sec() -> float:
-    """AI 호출 상한(초). 공모전·운영에서 무한 대기 방지."""
-    raw = (os.environ.get("OPENAI_TIMEOUT_SEC") or "120").strip()
-    try:
-        v = float(raw)
-    except ValueError:
-        v = 120.0
-    return max(5.0, min(600.0, v))
-
-
 def _safe_openai_feedbacks(req: TeamEvaluateRequest, enriched: list[MemberOut], api_key: str) -> list[str]:
     try:
         return _openai_feedbacks(req, enriched, api_key)
@@ -643,8 +635,6 @@ def _safe_openai_feedbacks(req: TeamEvaluateRequest, enriched: list[MemberOut], 
 
 
 def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_key: str) -> list[str]:
-    from openai import OpenAI
-
     payload = {
         "project": req.project_name,
         "members": [
@@ -664,7 +654,7 @@ def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_ke
 }
 비난하지 말고, 무임승차 의심이 있으면 사실 확인과 협업 개선을 권하는 톤으로 작성하세요."""
 
-    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
+    client = get_openai_client(api_key)
     res = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
@@ -809,8 +799,6 @@ def _heuristic(req: TeamEvaluateRequest) -> TeamEvaluateResponse:
 
 
 def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse:
-    from openai import OpenAI
-
     payload = {
         "project_name": req.project_name,
         "project_description": req.project_description,
@@ -833,7 +821,7 @@ def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse
 }
 커밋 수만으로 순위 매기지 말고 self_report·peer_notes·timeline으로 비가시 기여를 반영하세요."""
 
-    client = OpenAI(api_key=api_key, timeout=_openai_timeout_sec())
+    client = get_openai_client(api_key)
     res = client.chat.completions.create(
         model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
@@ -892,10 +880,26 @@ def _stamp_team_response(resp: TeamEvaluateResponse, request_id: str, t0: float)
 async def evaluate_team(body: TeamEvaluateRequest) -> TeamEvaluateResponse:
     request_id = str(uuid.uuid4())
     t0 = time.perf_counter()
-    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
-    if key:
+    has_llm = bool(
+        (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY") or "").strip()
+        or (os.environ.get("OPENAI_API_KEY") or "").strip()
+        or (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+        or (os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY") or "").strip()
+    )
+    if has_llm:
         try:
-            return _stamp_team_response(_openai_eval(body, key), request_id, t0)
+            from edu_tools.team_multi_llm import run_parallel_team_eval
+
+            merged = run_parallel_team_eval(body)
+            if merged is not None:
+                return _stamp_team_response(merged, request_id, t0)
         except Exception:
-            return _stamp_team_response(_heuristic(body), request_id, t0)
+            pass
+        key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+        if key:
+            try:
+                return _stamp_team_response(_openai_eval(body, key), request_id, t0)
+            except Exception:
+                return _stamp_team_response(_heuristic(body), request_id, t0)
+        return _stamp_team_response(_heuristic(body), request_id, t0)
     return _stamp_team_response(_heuristic(body), request_id, t0)
