@@ -1104,7 +1104,19 @@ async function submitRubricAlign(): Promise<void> {
 }
 
 function connectionStripHtml(): string {
-  return "";
+  const connected = !!state.health;
+  const stripClass = connected ? "conn-strip conn-strip--live" : "conn-strip conn-strip--partial";
+  const dotClass = connected ? "api-dot api-dot--on" : "api-dot api-dot--pulse";
+  const mainMsg = connected
+    ? "프론트 ↔ 백엔드 연결됨"
+    : "프론트 ↔ 백엔드 연결 대기 중";
+  return `
+  <div class="${stripClass}" role="status" aria-live="polite">
+    <div class="conn-strip-inner">
+      <span class="${dotClass}" aria-hidden="true"></span>
+      <span class="conn-msg">${mainMsg}</span>
+    </div>
+  </div>`;
 }
 
 function navHtml(): string {
