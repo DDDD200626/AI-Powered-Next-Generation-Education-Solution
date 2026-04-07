@@ -5,13 +5,6 @@ const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 const REPO_URL =
   "https://github.com/DDDD200626/AI-Powered-Next-Generation-Education-Solution";
 
-/** 평가 요청 시 AI·문서에 반영되도록 기본 문구 */
-const DEFAULT_TEAM_EVALUATION_CRITERIA = `평가 시 참고(수정 가능):
-■ 기술적 구현 — 시스템 구조·API·시각화·예외 처리
-■ AI 활용 — 다중 모델·생성형 보강(선택)·휴리스틱 폴백
-■ 실무 연계 — 팀 과제 운영(지표·동료·결과 점수·협업)과의 연결
-■ 분석 깊이 — 기여-결과 불일치·협업 네트워크·역할·이상 탐지·면담 질문·시뮬레이터 등`;
-
 function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
@@ -434,7 +427,7 @@ function emptyTeamMember(): TeamMemberRow {
 function applyDemoTeamData(): void {
   state.team.project_name = "데모: 풀스택 팀 프로젝트";
   state.team.project_description = "공모전·시연용 샘플입니다. 실제 과제와 무관합니다.";
-  state.team.evaluation_criteria = DEFAULT_TEAM_EVALUATION_CRITERIA;
+  state.team.evaluation_criteria = "";
   state.team.collaboration_edges_json = "";
   const a = emptyTeamMember();
   a.name = "김팀장";
@@ -586,7 +579,7 @@ const state: {
   team: {
     project_name: "",
     project_description: "",
-    evaluation_criteria: DEFAULT_TEAM_EVALUATION_CRITERIA,
+    evaluation_criteria: "",
     members: [emptyTeamMember(), emptyTeamMember()],
     collaboration_edges_json: "",
     report: null,
@@ -1355,11 +1348,10 @@ function teamHtml(): string {
       </div>
       <label class="lbl">프로젝트 설명</label>
       <textarea class="txt" id="team_project_description" rows="2">${escapeHtml(state.team.project_description)}</textarea>
-      <label class="lbl">평가 기준 (기본값 있음, 수정 가능)</label>
+      <label class="lbl">평가 기준 (선택)</label>
       <textarea class="txt" id="team_evaluation_criteria" rows="6">${escapeHtml(state.team.evaluation_criteria)}</textarea>
       <label class="lbl">협업 네트워크 (선택, JSON 배열)</label>
-      <textarea class="txt mono-input" id="team_collaboration_edges" rows="3" placeholder='[{"source":"이름A","target":"이름B","weight":40}]'>${escapeHtml(state.team.collaboration_edges_json)}</textarea>
-      <p class="muted small">source·target은 위 멤버 이름과 동일하게. weight는 0–100. 비우면 서버가 기여 지수로 간선을 추정합니다.</p>
+      <textarea class="txt mono-input" id="team_collaboration_edges" rows="3">${escapeHtml(state.team.collaboration_edges_json)}</textarea>
       ${blocks}
       <div class="row-actions">
         <button type="button" class="btn btn-ghost" id="btn-team-demo">데모 데이터 입력</button>
