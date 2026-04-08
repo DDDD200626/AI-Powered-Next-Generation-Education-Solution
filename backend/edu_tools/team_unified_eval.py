@@ -26,6 +26,12 @@ from edu_tools.team_ml_model import (
     train_if_needed,
 )
 from edu_tools.team_web_priors import get_web_priors
+from edu_tools.team_torch_model import (
+    predict_torch_score,
+    torch_available,
+    torch_model_meta,
+    train_torch_if_needed,
+)
 from learning_analysis.llm_clients import get_openai_client
 
 router = APIRouter()
@@ -274,9 +280,15 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
             }
         )
     append_samples(samples)
+
+    # 1) Prefer PyTorch deep model when available
+    torch_info = train_torch_if_needed()
+    use_torch = torch_available() and not (torch_info.get("enabled") is False)
+
+    # 2) Fallback lightweight model
     train_info = train_if_needed()
     model = load_model()
-    if not model:
+    if not model and not use_torch:
         for s in scores:
             s.dl_score = None
             s.dl_confidence = None
@@ -289,10 +301,21 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
             "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
         }
 
-    conf_base = max(35.0, min(95.0, 40.0 + model.sample_count * 0.6))
+    base_samples = 0
+    if use_torch:
+        base_samples = int((torch_model_meta().get("sample_count") or 0))
+    elif model:
+        base_samples = int(model.sample_count)
+    conf_base = max(35.0, min(95.0, 40.0 + base_samples * 0.6))
     for u, s in zip(users, scores):
         x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
-        dl_score = predict_score(model, x)
+        dl_score = None
+        if use_torch:
+            dl_score = predict_torch_score(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+        if dl_score is None and model:
+            dl_score = predict_score(model, x)
+        if dl_score is None:
+            dl_score = float(s.normalizedScore)
         # Optional web priors adjustment (small bounded delta)
         commit_gap = min(1.0, max(0.0, x[0] / math.log1p(30))) - (priors["commit_expectation"] / 100.0)
         pr_gap = min(1.0, max(0.0, x[1] / math.log1p(12))) - (priors["pr_expectation"] / 100.0)
@@ -307,13 +330,15 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         s.dl_confidence = round(conf, 1)
         s.blendedScore = round(0.7 * s.normalizedScore + 0.3 * s.dl_score, 2)
 
+    meta = torch_model_meta() if use_torch else {}
     return {
-        "model_name": "team-ml-linear-sgd",
+        "model_name": "team-torch-mlp" if use_torch else "team-ml-linear-sgd",
         "enabled": True,
-        "model_version": model.version,
-        "trained_at": model.trained_at,
-        "sample_count": model.sample_count,
-        "auto_retrain": bool(train_info.get("trained", False)),
+        "model_version": (meta.get("model_version") if use_torch else model.version if model else None),
+        "trained_at": (meta.get("trained_at") if use_torch else model.trained_at if model else None),
+        "sample_count": (meta.get("sample_count") if use_torch else model.sample_count if model else 0),
+        "auto_retrain": bool(torch_info.get("trained", False) if use_torch else train_info.get("trained", False)),
+        "backend": "pytorch" if use_torch else "lightweight-linear",
         "web_priors": priors_meta,
         "input_features": [
             "log_commits",
