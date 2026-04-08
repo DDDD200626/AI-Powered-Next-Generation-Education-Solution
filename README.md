@@ -36,6 +36,7 @@ streamlit run classpulse/app.py
 
 - **기계 판독 JSON**: `GET /api/capabilities` — 심사 4축·증빙 경로·엔드포인트 목록  
 - **심사위원용 상세 문서**: [`docs/CONTEST_RUBRIC.md`](docs/CONTEST_RUBRIC.md) (Mermaid 다이어그램 포함)
+- **제출 패키지 문서**: [`docs/SUBMISSION_PACKAGE.md`](docs/SUBMISSION_PACKAGE.md)
 
 ## 심사기준 부합 (요약)
 
