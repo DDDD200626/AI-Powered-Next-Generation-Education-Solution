@@ -1802,6 +1802,16 @@ body::before {
   border-bottom-color: rgba(251, 191, 36, 0.35);
 }
 
+.conn-strip--degraded {
+  border-bottom-color: rgba(251, 191, 36, 0.45);
+  box-shadow: inset 0 1px 0 rgba(251, 191, 36, 0.16);
+}
+
+.conn-strip--offline {
+  border-bottom-color: rgba(248, 113, 113, 0.45);
+  box-shadow: inset 0 1px 0 rgba(248, 113, 113, 0.16);
+}
+
 .conn-strip--wait {
   border-bottom-color: rgba(91, 143, 255, 0.25);
 }
@@ -1843,6 +1853,16 @@ body::before {
 .api-dot--pulse {
   background: var(--warn);
   animation: dotPulse 1.2s ease-in-out infinite;
+}
+
+.api-dot--degraded {
+  background: var(--warn);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.65);
+}
+
+.api-dot--off {
+  background: var(--danger);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.55);
 }
 
 @keyframes dotPulse {

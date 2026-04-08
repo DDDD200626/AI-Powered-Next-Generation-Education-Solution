@@ -16,6 +16,8 @@ interface BackendHealth {
 
 let lastHealthFetchedAt = 0;
 let lastHealthAttemptAt = 0;
+let lastHealthLatencyMs: number | null = null;
+let lastHealthCheckedAt = 0;
 const HEALTH_CACHE_MS = 5000;
 const HEALTH_RETRY_MS = 4000;
 /** 백엔드 미연결 시 주기적으로 /api/health 재시도 */
@@ -332,6 +334,7 @@ interface TeamUnifiedScoreResult {
   dl_score?: number;
   dl_confidence?: number;
   blendedScore?: number;
+  dl_top_factors?: string[];
 }
 
 interface TeamUnifiedAnomaly {
@@ -372,6 +375,16 @@ interface TeamTrendsPayload {
   member_filter?: string | null;
   members: string[];
   series: Record<string, TeamTrendPoint[]>;
+}
+
+interface TeamModelMonitorPayload {
+  window_days: number;
+  samples: number;
+  rule_avg: number;
+  dl_avg: number;
+  blended_avg: number;
+  rule_dl_drift: number;
+  recent_auto_retrain_count: number;
 }
 
 interface JudgeCriteriaScore {
@@ -551,6 +564,7 @@ const state: {
     trends_days: number;
     trends_member: string;
     trends_loading: boolean;
+    model_monitor: TeamModelMonitorPayload | null;
     what_if: WhatIfInput;
     loading: boolean;
     error: string | null;
@@ -623,6 +637,7 @@ const state: {
     trends_days: 30,
     trends_member: "",
     trends_loading: false,
+    model_monitor: null,
     what_if: { member_name: "", add_commits: 0, add_prs: 0, add_lines: 0 },
     loading: false,
     error: null,
@@ -844,8 +859,11 @@ async function refreshHealth(force = false): Promise<void> {
   if (!force && state.health && now - lastHealthFetchedAt < HEALTH_CACHE_MS) return;
   if (!force && !state.health && now - lastHealthAttemptAt < HEALTH_RETRY_MS) return;
   lastHealthAttemptAt = now;
+  const t0 = performance.now();
   try {
     const r = await apiFetch("/api/health", { timeoutMs: 10_000 });
+    lastHealthLatencyMs = Math.max(0, Math.round(performance.now() - t0));
+    lastHealthCheckedAt = Date.now();
     if (!r.ok) {
       state.health = null;
       ensureHealthPollWhenDisconnected();
@@ -856,6 +874,8 @@ async function refreshHealth(force = false): Promise<void> {
     clearHealthPoll();
   } catch {
     state.health = null;
+    lastHealthLatencyMs = null;
+    lastHealthCheckedAt = Date.now();
     ensureHealthPollWhenDisconnected();
   }
 }
@@ -992,6 +1012,7 @@ async function submitTeam(): Promise<void> {
     }
     state.team.report = data;
     void fetchTeamTrends();
+    void fetchTeamModelMonitor();
     clearTeamDraft();
   } catch (e) {
     state.team.error = e instanceof Error ? e.message : String(e);
@@ -999,6 +1020,22 @@ async function submitTeam(): Promise<void> {
     state.team.loading = false;
   }
   renderSync();
+}
+
+async function fetchTeamModelMonitor(): Promise<void> {
+  try {
+    const r = await apiFetch("/api/team/model/monitor?days=30");
+    const data = (await r.json()) as { status?: string; monitor?: TeamModelMonitorPayload };
+    if (!r.ok || !data.monitor) {
+      state.team.model_monitor = null;
+      return;
+    }
+    state.team.model_monitor = data.monitor;
+  } catch {
+    state.team.model_monitor = null;
+  } finally {
+    renderSync();
+  }
 }
 
 async function fetchTeamTrends(): Promise<void> {
@@ -1094,6 +1131,18 @@ function teamTrendHtml(): string {
       <p class="muted small">${escapeHtml(trendInsight(pts))}</p>`
         : `<p class="muted small">추세 데이터가 아직 충분하지 않습니다. 팀 평가를 누적 실행하면 그래프가 표시됩니다.</p>`
     }
+  </section>`;
+}
+
+function modelMonitorHtml(): string {
+  const m = state.team.model_monitor;
+  if (!m) return "";
+  const driftSign = m.rule_dl_drift >= 0 ? "+" : "";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">모델 모니터링 (최근 ${m.window_days}일)</h3>
+    <p class="muted small">샘플 ${m.samples}건 · Rule 평균 ${m.rule_avg.toFixed(1)} · DL 평균 ${m.dl_avg.toFixed(1)} · 혼합 평균 ${m.blended_avg.toFixed(1)}</p>
+    <p class="muted small">Rule↔DL 드리프트: ${driftSign}${m.rule_dl_drift.toFixed(2)} · 자동 재학습 ${m.recent_auto_retrain_count}회</p>
   </section>`;
 }
 
@@ -1373,16 +1422,29 @@ async function submitRubricAlign(): Promise<void> {
 
 function connectionStripHtml(): string {
   const connected = !!state.health;
-  const stripClass = connected ? "conn-strip conn-strip--live" : "conn-strip conn-strip--partial";
-  const dotClass = connected ? "api-dot api-dot--on" : "api-dot api-dot--pulse";
-  const mainMsg = connected
-    ? "프론트 ↔ 백엔드 연결됨"
-    : "프론트 ↔ 백엔드 연결 대기 중";
+  const latency = lastHealthLatencyMs;
+  const isDegraded = connected && latency != null && latency >= 1200;
+  const status = connected ? (isDegraded ? "DEGRADED" : "LIVE") : "OFFLINE";
+  const stripClass = connected
+    ? isDegraded
+      ? "conn-strip conn-strip--degraded"
+      : "conn-strip conn-strip--live"
+    : "conn-strip conn-strip--offline";
+  const dotClass = connected ? (isDegraded ? "api-dot api-dot--degraded" : "api-dot api-dot--on") : "api-dot api-dot--off";
+  const mainMsg =
+    status === "LIVE"
+      ? "프론트 ↔ 백엔드 정상 연결"
+      : status === "DEGRADED"
+        ? "프론트 ↔ 백엔드 연결(지연)"
+        : "프론트 ↔ 백엔드 미연결";
+  const checked = lastHealthCheckedAt ? new Date(lastHealthCheckedAt).toLocaleTimeString() : "-";
+  const latencyTxt = latency != null ? `${latency}ms` : "-";
   return `
   <div class="${stripClass}" role="status" aria-live="polite">
     <div class="conn-strip-inner">
       <span class="${dotClass}" aria-hidden="true"></span>
-      <span class="conn-msg">${mainMsg}</span>
+      <span class="conn-msg"><strong>${status}</strong> · ${mainMsg}</span>
+      <span class="conn-code">응답 ${latencyTxt} · 확인 ${checked}</span>
     </div>
   </div>`;
 }
@@ -1550,6 +1612,11 @@ function teamReportHtml(): string {
           ? `<p class="muted small"><strong>DL 보강</strong> ${s.dl_score.toFixed(1)} · <strong>최종 혼합</strong> ${s.blendedScore.toFixed(1)} ${s.dl_confidence != null ? `(신뢰도 ${s.dl_confidence.toFixed(1)})` : ""}</p>`
           : ""
       }
+      ${
+        s.dl_top_factors?.length
+          ? `<p class="muted small">DL 영향 요인: ${escapeHtml(s.dl_top_factors.join(", "))}</p>`
+          : ""
+      }
       <p class="muted small">팀 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%</p>
       ${trust != null ? `<p class="report-trust"><strong>데이터 신뢰도</strong> <span class="score-num">${trust.toFixed(0)}</span>% <span class="muted small">(Git ${rel.git_ratio_percent.toFixed(0)}% / 자기서술 ${rel.self_report_ratio_percent.toFixed(0)}%)</span></p>` : ""}
       ${rel.note ? `<p class="muted small">⚠️ ${escapeHtml(rel.note)}</p>` : ""}
@@ -1606,6 +1673,7 @@ function teamReportHtml(): string {
     <div class="report-flow">${scoreSections}</div>
     ${whatIfSimulatorHtml(rep)}
     ${teamTrendHtml()}
+    ${modelMonitorHtml()}
     <p class="footer-note muted small">${escapeHtml(rep.disclaimer)}</p>
   </section>`;
 }

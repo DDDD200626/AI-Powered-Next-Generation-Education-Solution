@@ -38,7 +38,7 @@ from edu_tools.discussion import router as discussion_router
 from edu_tools.feedback import router as feedback_router
 from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
-from edu_tools.team_data_store import contribution_trends, db_profile
+from edu_tools.team_data_store import contribution_trends, db_profile, model_monitor
 from edu_tools.team_unified_eval import router as team_unified_router
 from learning_analysis.compare_freeform import compare_llm_async
 from learning_analysis.pipeline import analyze_async, provider_keys_status
@@ -253,6 +253,13 @@ async def api_team_data_trends(response: Response, days: int = 30, member_name: 
         "status": "ok",
         "trends": contribution_trends(days=days, member_name=member_name or None),
     }
+
+
+@app.get("/api/team/model/monitor")
+async def api_team_model_monitor(response: Response, days: int = 30):
+    """DL 보조 모델 운영 모니터링 요약."""
+    response.headers["Cache-Control"] = "private, max-age=5"
+    return {"status": "ok", "monitor": model_monitor(window_days=days)}
 
 
 @app.get("/api/observability")

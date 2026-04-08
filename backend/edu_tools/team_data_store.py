@@ -246,3 +246,64 @@ def contribution_trends(days: int = 30, member_name: str | None = None) -> dict[
     finally:
         c.close()
 
+
+def model_monitor(window_days: int = 30) -> dict[str, Any]:
+    """Model monitoring summary for recent window."""
+    init_db()
+    c = _conn()
+    try:
+        d = max(1, min(365, int(window_days)))
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT
+              COUNT(*) AS n,
+              ROUND(AVG(rule_score), 2) AS rule_avg,
+              ROUND(AVG(dl_score), 2) AS dl_avg,
+              ROUND(AVG(blended_score), 2) AS blended_avg
+            FROM contribution_events
+            WHERE datetime(created_at) >= datetime('now', ?)
+            """,
+            (f"-{d} day",),
+        )
+        agg = cur.fetchone()
+        cur.execute(
+            """
+            SELECT
+              model_name,
+              COALESCE(model_version, '') AS model_version,
+              sample_count,
+              auto_retrain,
+              created_at
+            FROM model_runs
+            ORDER BY id DESC
+            LIMIT 10
+            """
+        )
+        runs = [
+            {
+                "model_name": str(r["model_name"] or ""),
+                "model_version": str(r["model_version"] or ""),
+                "sample_count": int(r["sample_count"] or 0),
+                "auto_retrain": bool(int(r["auto_retrain"] or 0)),
+                "created_at": str(r["created_at"] or ""),
+            }
+            for r in cur.fetchall()
+        ]
+        retrain_count = sum(1 for r in runs if r["auto_retrain"])
+        drift = 0.0
+        if agg and agg["rule_avg"] is not None and agg["dl_avg"] is not None:
+            drift = float(agg["dl_avg"]) - float(agg["rule_avg"])
+        return {
+            "window_days": d,
+            "samples": int((agg["n"] if agg and agg["n"] is not None else 0) or 0),
+            "rule_avg": float((agg["rule_avg"] if agg and agg["rule_avg"] is not None else 0.0) or 0.0),
+            "dl_avg": float((agg["dl_avg"] if agg and agg["dl_avg"] is not None else 0.0) or 0.0),
+            "blended_avg": float((agg["blended_avg"] if agg and agg["blended_avg"] is not None else 0.0) or 0.0),
+            "rule_dl_drift": round(drift, 2),
+            "recent_runs": runs,
+            "recent_auto_retrain_count": retrain_count,
+        }
+    finally:
+        c.close()
+

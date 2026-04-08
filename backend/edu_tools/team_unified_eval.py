@@ -104,6 +104,10 @@ class ScoreResult(BaseModel):
         le=100,
         description="최종 점수: 0.7 * normalizedScore + 0.3 * dl_score",
     )
+    dl_top_factors: list[str] = Field(
+        default_factory=list,
+        description="DL 점수에 크게 영향을 준 요인 Top3",
+    )
 
 
 class AnomalyResult(BaseModel):
@@ -322,6 +326,16 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         att_gap = x[3] - (priors["attendance_expectation"] / 100.0)
         prior_delta = (commit_gap * 5.0) + (pr_gap * 4.0) + (att_gap * 3.0)
         dl_score = max(0.0, min(100.0, dl_score + prior_delta))
+        # Explainability: feature impact ranking (simple, stable)
+        factors = [
+            ("커밋 활동", x[0] - (priors["commit_expectation"] / 100.0)),
+            ("PR 협업", x[1] - (priors["pr_expectation"] / 100.0)),
+            ("코드 변화량", x[2] - (priors["lines_expectation"] / 100.0)),
+            ("출석/참여", x[3] - (priors["attendance_expectation"] / 100.0)),
+            ("자기서술 밀도", x[4] - (priors["self_report_words_expectation"] / 100.0)),
+        ]
+        top = sorted(factors, key=lambda t: abs(t[1]), reverse=True)[:3]
+        s.dl_top_factors = [f"{name} {'+' if val >= 0 else '-'}" for name, val in top]
         # 입력 다양도 기반 confidence 보정
         x_min, x_max = min(x), max(x)
         spread = x_max - x_min
