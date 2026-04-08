@@ -382,6 +382,13 @@ interface JudgeCriteriaScore {
   overall: number;
 }
 
+interface WhatIfInput {
+  member_name: string;
+  add_commits: number;
+  add_prs: number;
+  add_lines: number;
+}
+
 interface AtRiskResponse {
   mode: string;
   dropout_risk: number;
@@ -544,6 +551,7 @@ const state: {
     trends_days: number;
     trends_member: string;
     trends_loading: boolean;
+    what_if: WhatIfInput;
     loading: boolean;
     error: string | null;
   };
@@ -615,6 +623,7 @@ const state: {
     trends_days: 30,
     trends_member: "",
     trends_loading: false,
+    what_if: { member_name: "", add_commits: 0, add_prs: 0, add_lines: 0 },
     loading: false,
     error: null,
   },
@@ -1088,6 +1097,56 @@ function teamTrendHtml(): string {
   </section>`;
 }
 
+function confidenceGateHtml(rep: TeamUnifiedReport): string {
+  const trustVals = Object.values(rep.trust_scores || {});
+  const avgTrust = trustVals.length ? trustVals.reduce((a, b) => a + b, 0) / trustVals.length : 0;
+  const anomalyCount = (rep.anomalies || []).reduce((a, x) => a + (x.flags?.length || 0), 0);
+  const dataPoints = rep.scores.length;
+  const confidence = Math.max(0, Math.min(100, avgTrust - anomalyCount * 2 + Math.min(10, dataPoints * 1.5)));
+  const level = confidence >= 75 ? "HIGH" : confidence >= 55 ? "MEDIUM" : "LOW";
+  const guide =
+    level === "HIGH"
+      ? "신뢰도 양호: 현재 결과를 기준으로 면담/피드백을 진행할 수 있습니다."
+      : level === "MEDIUM"
+        ? "중간 신뢰도: 협업 근거(PR/리뷰/출석) 데이터를 추가하면 결과 안정성이 향상됩니다."
+        : "낮은 신뢰도: 데이터가 부족하거나 이상 플래그가 많습니다. 입력 보강 후 재평가를 권장합니다.";
+  const cls = level === "HIGH" ? "pill-on" : level === "MEDIUM" ? "pill-muted" : "pill-warn";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">평가 신뢰도 게이트</h3>
+    <p><span class="pill ${cls}">${level}</span> <strong class="score-num">${confidence.toFixed(1)}</strong> / 100</p>
+    <p class="muted small">${escapeHtml(guide)}</p>
+  </section>`;
+}
+
+function whatIfSimulatorHtml(rep: TeamUnifiedReport): string {
+  const names = rep.scores.map((s) => s.member_name);
+  const selected = state.team.what_if.member_name || names[0] || "";
+  const member = rep.scores.find((s) => s.member_name === selected) || rep.scores[0];
+  if (!member) return "";
+  const cDelta = Math.max(0, state.team.what_if.add_commits);
+  const pDelta = Math.max(0, state.team.what_if.add_prs);
+  const lDelta = Math.max(0, state.team.what_if.add_lines);
+  const uplift = cDelta * 0.9 + pDelta * 1.3 + Math.min(20, lDelta / 180);
+  const after = Math.max(0, Math.min(100, member.normalizedScore + uplift));
+  const blend = member.blendedScore ?? member.normalizedScore;
+  const blendAfter = Math.max(0, Math.min(100, blend + uplift * 0.85));
+  const options = names
+    .map((n) => `<option value="${escapeHtml(n)}" ${n === selected ? "selected" : ""}>${escapeHtml(n)}</option>`)
+    .join("");
+  return `
+  <section class="panel hud-panel whatif-panel">
+    <h3 class="subh">What-if 시뮬레이터 (가산 활동 시 예상 변화)</h3>
+    <div class="grid-2 no-print">
+      <div><label class="lbl">멤버</label><select id="whatif-member" class="txt">${options}</select></div>
+      <div><label class="lbl">커밋 추가</label><input id="whatif-commits" class="txt" type="number" min="0" value="${cDelta}" /></div>
+      <div><label class="lbl">PR 추가</label><input id="whatif-prs" class="txt" type="number" min="0" value="${pDelta}" /></div>
+      <div><label class="lbl">라인 추가</label><input id="whatif-lines" class="txt" type="number" min="0" value="${lDelta}" /></div>
+    </div>
+    <p class="muted small">${escapeHtml(selected)} 기준: 정규화 <strong>${member.normalizedScore.toFixed(1)}</strong> → <strong>${after.toFixed(1)}</strong> / 혼합 <strong>${blend.toFixed(1)}</strong> → <strong>${blendAfter.toFixed(1)}</strong></p>
+  </section>`;
+}
+
 function readAtRiskForm(): void {
   const g = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement | null;
   state.atRisk.course_name = g("ar_course")?.value ?? "";
@@ -1542,8 +1601,10 @@ function teamReportHtml(): string {
         : ""
     }
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
+    ${confidenceGateHtml(rep)}
     ${edgeCases}
     <div class="report-flow">${scoreSections}</div>
+    ${whatIfSimulatorHtml(rep)}
     ${teamTrendHtml()}
     <p class="footer-note muted small">${escapeHtml(rep.disclaimer)}</p>
   </section>`;
@@ -2118,6 +2179,27 @@ function wire(): void {
     if (d) state.team.trends_days = parseInt(d.value, 10) || 30;
     if (m) state.team.trends_member = m.value;
     void fetchTeamTrends();
+  });
+
+  document.getElementById("whatif-member")?.addEventListener("change", () => {
+    const v = (document.getElementById("whatif-member") as HTMLSelectElement | null)?.value ?? "";
+    state.team.what_if.member_name = v;
+    renderSync();
+  });
+  document.getElementById("whatif-commits")?.addEventListener("input", () => {
+    const v = parseInt((document.getElementById("whatif-commits") as HTMLInputElement | null)?.value ?? "0", 10);
+    state.team.what_if.add_commits = Number.isFinite(v) ? Math.max(0, v) : 0;
+    renderSync();
+  });
+  document.getElementById("whatif-prs")?.addEventListener("input", () => {
+    const v = parseInt((document.getElementById("whatif-prs") as HTMLInputElement | null)?.value ?? "0", 10);
+    state.team.what_if.add_prs = Number.isFinite(v) ? Math.max(0, v) : 0;
+    renderSync();
+  });
+  document.getElementById("whatif-lines")?.addEventListener("input", () => {
+    const v = parseInt((document.getElementById("whatif-lines") as HTMLInputElement | null)?.value ?? "0", 10);
+    state.team.what_if.add_lines = Number.isFinite(v) ? Math.max(0, v) : 0;
+    renderSync();
   });
 
   document.getElementById("btn-ar-run")?.addEventListener("click", () => {
