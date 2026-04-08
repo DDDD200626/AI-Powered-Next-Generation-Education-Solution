@@ -314,8 +314,12 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
     for u, s in zip(users, scores):
         x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
         dl_score = None
+        dl_uncertainty = None
         if use_torch:
-            dl_score = predict_torch_score(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+            pred = predict_torch_score(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+            if pred is not None:
+                dl_score = float(pred.get("score", 0.0))
+                dl_uncertainty = float(pred.get("uncertainty", 0.0))
         if dl_score is None and model:
             dl_score = predict_score(model, x)
         if dl_score is None:
@@ -340,6 +344,8 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         x_min, x_max = min(x), max(x)
         spread = x_max - x_min
         conf = max(0.0, min(100.0, conf_base + spread * 8.0))
+        if dl_uncertainty is not None:
+            conf = max(0.0, min(100.0, conf - min(20.0, dl_uncertainty * 3.0)))
         s.dl_score = round(dl_score, 2)
         s.dl_confidence = round(conf, 1)
         s.blendedScore = round(0.7 * s.normalizedScore + 0.3 * s.dl_score, 2)
@@ -353,6 +359,10 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         "sample_count": (meta.get("sample_count") if use_torch else model.sample_count if model else 0),
         "auto_retrain": bool(torch_info.get("trained", False) if use_torch else train_info.get("trained", False)),
         "backend": "pytorch" if use_torch else "lightweight-linear",
+        "quality": {
+            "validation_mae_mean": meta.get("validation_mae_mean") if use_torch else None,
+            "ensemble_size": meta.get("ensemble_size") if use_torch else None,
+        },
         "web_priors": priors_meta,
         "input_features": [
             "log_commits",

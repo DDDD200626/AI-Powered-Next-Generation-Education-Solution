@@ -402,6 +402,14 @@ interface WhatIfInput {
   add_lines: number;
 }
 
+interface TeamRecheckResult {
+  runs: number;
+  mean_overall: number;
+  spread_overall: number;
+  stability_label: "HIGH" | "MEDIUM" | "LOW";
+  notes: string[];
+}
+
 interface AtRiskResponse {
   mode: string;
   dropout_risk: number;
@@ -566,6 +574,8 @@ const state: {
     trends_loading: boolean;
     model_monitor: TeamModelMonitorPayload | null;
     what_if: WhatIfInput;
+    recheck_loading: boolean;
+    recheck_result: TeamRecheckResult | null;
     loading: boolean;
     error: string | null;
   };
@@ -639,6 +649,8 @@ const state: {
     trends_loading: false,
     model_monitor: null,
     what_if: { member_name: "", add_commits: 0, add_prs: 0, add_lines: 0 },
+    recheck_loading: false,
+    recheck_result: null,
     loading: false,
     error: null,
   },
@@ -965,6 +977,77 @@ async function submitTeam(): Promise<void> {
   state.team.loading = true;
   renderSync();
 
+  const buildBody = (): { body: { project_name: string; teamData: Array<Record<string, unknown>> } | null; error?: string } => {
+    const rows = state.team.members.filter((m) => m.name.trim());
+    const teamData = rows.map((m) => {
+      const att = parseOptFloat(m.attendance);
+      const meet = parseOptInt(m.meetings_attended);
+      const attendance =
+        att != null
+          ? Math.min(100, Math.max(0, att))
+          : Math.min(100, Math.max(0, (meet ?? 0) * 12.5));
+      return {
+        name: m.name.trim(),
+        commits: parseOptInt(m.commits) ?? 0,
+        prs: parseOptInt(m.pull_requests) ?? 0,
+        lines: parseOptInt(m.lines_changed) ?? 0,
+        attendance,
+        selfReport: m.self_report,
+      };
+    });
+    if (!state.team.project_name.trim() || teamData.length === 0) {
+      return { body: null, error: "프로젝트명과 최소 한 명의 이름을 입력하세요." };
+    }
+    return {
+      body: {
+        project_name: state.team.project_name.trim(),
+        teamData,
+      },
+    };
+  };
+
+  const built = buildBody();
+  if (!built.body) {
+    state.team.error = built.error || "입력 오류";
+    state.team.loading = false;
+    renderSync();
+    return;
+  }
+
+  try {
+    const r = await apiFetch("/api/team/report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(built.body),
+    });
+    const data = (await r.json()) as TeamUnifiedReport & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.team.error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+      state.team.loading = false;
+      renderSync();
+      return;
+    }
+    state.team.report = data;
+    state.team.recheck_result = null;
+    void fetchTeamTrends();
+    void fetchTeamModelMonitor();
+    clearTeamDraft();
+  } catch (e) {
+    state.team.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.team.loading = false;
+  }
+  renderSync();
+}
+
+async function runTeamRecheck(): Promise<void> {
+  readTeamForm();
+  state.team.error = null;
+  state.team.recheck_loading = true;
+  renderSync();
+
   const rows = state.team.members.filter((m) => m.name.trim());
   const teamData = rows.map((m) => {
     const att = parseOptFloat(m.attendance);
@@ -985,7 +1068,7 @@ async function submitTeam(): Promise<void> {
 
   if (!state.team.project_name.trim() || teamData.length === 0) {
     state.team.error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
-    state.team.loading = false;
+    state.team.recheck_loading = false;
     renderSync();
     return;
   }
@@ -996,28 +1079,50 @@ async function submitTeam(): Promise<void> {
   };
 
   try {
-    const r = await apiFetch("/api/team/report", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await r.json()) as TeamUnifiedReport & { detail?: unknown };
-    if (!r.ok) {
-      const d = data.detail;
-      state.team.error =
-        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
-      state.team.loading = false;
-      renderSync();
-      return;
+    const runs: number[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const r = await apiFetch("/api/team/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = (await r.json()) as TeamUnifiedReport & { detail?: unknown };
+      if (!r.ok) {
+        const d = data.detail;
+        state.team.error = typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "요청 실패";
+        state.team.recheck_loading = false;
+        renderSync();
+        return;
+      }
+      const mean = data.scores.length
+        ? data.scores.reduce((a, s) => a + (s.blendedScore ?? s.normalizedScore), 0) / data.scores.length
+        : 0;
+      runs.push(mean);
+      if (i === 2) state.team.report = data;
     }
-    state.team.report = data;
-    void fetchTeamTrends();
-    void fetchTeamModelMonitor();
-    clearTeamDraft();
+    const mean_overall = runs.reduce((a, b) => a + b, 0) / runs.length;
+    const spread_overall = Math.max(...runs) - Math.min(...runs);
+    const stability_label: "HIGH" | "MEDIUM" | "LOW" =
+      spread_overall <= 1.5 ? "HIGH" : spread_overall <= 3.5 ? "MEDIUM" : "LOW";
+    const notes: string[] = [
+      `3회 평균 점수 ${mean_overall.toFixed(2)}, 편차 ${spread_overall.toFixed(2)}`,
+      stability_label === "HIGH"
+        ? "평가 일관성이 높습니다."
+        : stability_label === "MEDIUM"
+          ? "평가 편차가 중간 수준입니다. 데이터 보강 시 안정성이 향상됩니다."
+          : "평가 편차가 큽니다. 입력 데이터 품질/충분성을 점검하세요.",
+    ];
+    state.team.recheck_result = {
+      runs: 3,
+      mean_overall: Number(mean_overall.toFixed(2)),
+      spread_overall: Number(spread_overall.toFixed(2)),
+      stability_label,
+      notes,
+    };
   } catch (e) {
     state.team.error = e instanceof Error ? e.message : String(e);
   } finally {
-    state.team.loading = false;
+    state.team.recheck_loading = false;
   }
   renderSync();
 }
@@ -1143,6 +1248,18 @@ function modelMonitorHtml(): string {
     <h3 class="subh">모델 모니터링 (최근 ${m.window_days}일)</h3>
     <p class="muted small">샘플 ${m.samples}건 · Rule 평균 ${m.rule_avg.toFixed(1)} · DL 평균 ${m.dl_avg.toFixed(1)} · 혼합 평균 ${m.blended_avg.toFixed(1)}</p>
     <p class="muted small">Rule↔DL 드리프트: ${driftSign}${m.rule_dl_drift.toFixed(2)} · 자동 재학습 ${m.recent_auto_retrain_count}회</p>
+  </section>`;
+}
+
+function recheckHtml(): string {
+  const r = state.team.recheck_result;
+  if (!r) return "";
+  const pill = r.stability_label === "HIGH" ? "pill-on" : r.stability_label === "MEDIUM" ? "pill-muted" : "pill-warn";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">Re-check 검증 결과</h3>
+    <p><span class="pill ${pill}">${r.stability_label}</span> 평균 ${r.mean_overall.toFixed(2)} · 편차 ${r.spread_overall.toFixed(2)} (${r.runs}회)</p>
+    <ul class="report-flags">${r.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ul>
   </section>`;
 }
 
@@ -1657,6 +1774,7 @@ function teamReportHtml(): string {
     <div class="result-toolbar no-print" role="toolbar">
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-json">JSON 내보내기</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-evidence">심사 제출 패키지</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-recheck" ${state.team.recheck_loading ? "disabled" : ""}>${state.team.recheck_loading ? "검증 중..." : "Re-check(3회)"} </button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-copy-summary">요약 복사</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-print">인쇄·PDF</button>
     </div>
@@ -1673,6 +1791,7 @@ function teamReportHtml(): string {
     <div class="report-flow">${scoreSections}</div>
     ${whatIfSimulatorHtml(rep)}
     ${teamTrendHtml()}
+    ${recheckHtml()}
     ${modelMonitorHtml()}
     <p class="footer-note muted small">${escapeHtml(rep.disclaimer)}</p>
   </section>`;
@@ -2239,6 +2358,10 @@ function wire(): void {
 
   document.getElementById("btn-team-print")?.addEventListener("click", () => {
     window.print();
+  });
+
+  document.getElementById("btn-team-recheck")?.addEventListener("click", () => {
+    void runTeamRecheck();
   });
 
   document.getElementById("btn-trend-refresh")?.addEventListener("click", () => {
