@@ -38,6 +38,7 @@ from edu_tools.discussion import router as discussion_router
 from edu_tools.feedback import router as feedback_router
 from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
+from edu_tools.team_data_store import contribution_trends, db_profile
 from edu_tools.team_unified_eval import router as team_unified_router
 from learning_analysis.compare_freeform import compare_llm_async
 from learning_analysis.pipeline import analyze_async, provider_keys_status
@@ -235,6 +236,23 @@ async def api_capabilities(response: Response):
     """공모전 심사 4개 기준 요약·증빙 경로·엔드포인트 목록(JSON)."""
     response.headers["Cache-Control"] = "private, max-age=30"
     return _capabilities_payload()
+
+
+@app.get("/api/team/data/profile")
+async def api_team_data_profile(response: Response):
+    """팀 기여 데이터셋/모델런 로그 규모 확인용."""
+    response.headers["Cache-Control"] = "private, max-age=5"
+    return {"status": "ok", "profile": db_profile()}
+
+
+@app.get("/api/team/data/trends")
+async def api_team_data_trends(response: Response, days: int = 30, member_name: str = ""):
+    """기간별 개인 기여도 추세(룰/ML/혼합) 조회."""
+    response.headers["Cache-Control"] = "private, max-age=5"
+    return {
+        "status": "ok",
+        "trends": contribution_trends(days=days, member_name=member_name or None),
+    }
 
 
 @app.get("/api/observability")

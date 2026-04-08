@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import uuid
@@ -16,6 +17,15 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from edu_tools.team_data_store import db_profile, record_team_report
+from edu_tools.team_ml_model import (
+    append_samples,
+    feature_row,
+    load_model,
+    predict_score,
+    train_if_needed,
+)
+from edu_tools.team_web_priors import get_web_priors
 from learning_analysis.llm_clients import get_openai_client
 
 router = APIRouter()
@@ -76,6 +86,18 @@ class ScoreResult(BaseModel):
     weighted_points: WeightedPoints
     pct_vs_team_mean: float
     data_reliability: DataReliability
+    dl_score: float | None = Field(
+        default=None, ge=0, le=100, description="경량 신경망 기반 데이터 학습 점수(보강 신호)"
+    )
+    dl_confidence: float | None = Field(
+        default=None, ge=0, le=100, description="입력 밀도·분산 기반 신뢰도"
+    )
+    blendedScore: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="최종 점수: 0.7 * normalizedScore + 0.3 * dl_score",
+    )
 
 
 class AnomalyResult(BaseModel):
@@ -98,6 +120,7 @@ class TeamReportResponse(BaseModel):
     analysis: list[AnalysisResult]
     edge_cases: list[str] = Field(default_factory=list)
     trust_scores: dict[str, float] = Field(default_factory=dict)
+    dl_model_info: dict[str, Any] = Field(default_factory=dict)
     evaluation_log: dict[str, Any] = Field(default_factory=dict)
     disclaimer: str = Field(
         default="정량 점수는 결정론적으로 계산되며, AI는 설명만 생성합니다."
@@ -226,6 +249,81 @@ def run_score_engine(users: list[TeamUserIn]) -> tuple[list[ScoreResult], dict[s
             )
         )
     return out, trust
+
+
+def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[str, Any]:
+    """학습 데이터 기반 ML 보강 점수.
+
+    - 요청마다 (feature, target=normalizedScore) 샘플을 누적
+    - 샘플 수가 쌓이면 자동 재학습
+    - 저장된 최신 모델로 dl_score 산출
+    """
+    if not users or not scores:
+        return {"model_name": "team-ml", "enabled": False}
+
+    priors, priors_meta = get_web_priors()
+    samples: list[dict[str, Any]] = []
+    for u, s in zip(users, scores):
+        x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+        samples.append(
+            {
+                "x": x,
+                "y": float(s.normalizedScore),
+                "member": u.name.strip(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    append_samples(samples)
+    train_info = train_if_needed()
+    model = load_model()
+    if not model:
+        for s in scores:
+            s.dl_score = None
+            s.dl_confidence = None
+            s.blendedScore = float(s.normalizedScore)
+        return {
+            "model_name": "team-ml",
+            "enabled": False,
+            "reason": "model_not_ready",
+            "sample_count": train_info.get("sample_count", 0),
+            "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+        }
+
+    conf_base = max(35.0, min(95.0, 40.0 + model.sample_count * 0.6))
+    for u, s in zip(users, scores):
+        x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+        dl_score = predict_score(model, x)
+        # Optional web priors adjustment (small bounded delta)
+        commit_gap = min(1.0, max(0.0, x[0] / math.log1p(30))) - (priors["commit_expectation"] / 100.0)
+        pr_gap = min(1.0, max(0.0, x[1] / math.log1p(12))) - (priors["pr_expectation"] / 100.0)
+        att_gap = x[3] - (priors["attendance_expectation"] / 100.0)
+        prior_delta = (commit_gap * 5.0) + (pr_gap * 4.0) + (att_gap * 3.0)
+        dl_score = max(0.0, min(100.0, dl_score + prior_delta))
+        # 입력 다양도 기반 confidence 보정
+        x_min, x_max = min(x), max(x)
+        spread = x_max - x_min
+        conf = max(0.0, min(100.0, conf_base + spread * 8.0))
+        s.dl_score = round(dl_score, 2)
+        s.dl_confidence = round(conf, 1)
+        s.blendedScore = round(0.7 * s.normalizedScore + 0.3 * s.dl_score, 2)
+
+    return {
+        "model_name": "team-ml-linear-sgd",
+        "enabled": True,
+        "model_version": model.version,
+        "trained_at": model.trained_at,
+        "sample_count": model.sample_count,
+        "auto_retrain": bool(train_info.get("trained", False)),
+        "web_priors": priors_meta,
+        "input_features": [
+            "log_commits",
+            "log_prs",
+            "log_lines",
+            "attendance_norm",
+            "log_self_report_words",
+        ],
+        "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+    }
 
 
 def run_anomaly_detector(users: list[TeamUserIn], scores: list[ScoreResult]) -> list[AnomalyResult]:
@@ -358,6 +456,7 @@ def run_ai_analyzer(
 def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
     users = body.teamData
     scores, trust = run_score_engine(users)
+    dl_model_info = apply_dl_scores(users, scores)
     anomalies = run_anomaly_detector(users, scores)
     analysis = run_ai_analyzer(users, scores, anomalies)
     edge_cases = detect_edge_cases(users, scores)
@@ -374,15 +473,31 @@ def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
         "input_hash": input_hash,
         "input_data": input_data,
         "score": [s.model_dump() for s in scores],
+        "dl_model_info": dl_model_info,
         "anomaly": [a.model_dump() for a in anomalies],
         "ai_result": [a.model_dump() for a in analysis],
         "edge_cases": edge_cases,
     }
+    try:
+        record_team_report(
+            request_id=req_id,
+            project_name=body.project_name.strip(),
+            users=input_data,
+            scores=[s.model_dump() for s in scores],
+            anomalies=[a.model_dump() for a in anomalies],
+            trust_scores=trust,
+            dl_model_info=dl_model_info,
+        )
+        evaluation_log["db_profile"] = db_profile()
+    except Exception:
+        # DB 저장 실패가 평가 API 실패로 이어지지 않도록 방어
+        evaluation_log["db_profile"] = {"error": "db_store_failed"}
     return TeamReportResponse(
         scores=scores,
         anomalies=anomalies,
         analysis=analysis,
         edge_cases=edge_cases,
         trust_scores=trust,
+        dl_model_info=dl_model_info,
         evaluation_log=evaluation_log,
     )

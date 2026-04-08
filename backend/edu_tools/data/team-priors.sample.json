@@ -1,0 +1,9 @@
+{
+  "priors": {
+    "commit_expectation": 55.0,
+    "pr_expectation": 52.0,
+    "lines_expectation": 54.0,
+    "attendance_expectation": 70.0,
+    "self_report_words_expectation": 45.0
+  }
+}

@@ -329,6 +329,9 @@ interface TeamUnifiedScoreResult {
     self_report_ratio_percent: number;
     note?: string;
   };
+  dl_score?: number;
+  dl_confidence?: number;
+  blendedScore?: number;
 }
 
 interface TeamUnifiedAnomaly {
@@ -351,8 +354,32 @@ interface TeamUnifiedReport {
   analysis: TeamUnifiedAnalysis[];
   edge_cases: string[];
   trust_scores: Record<string, number>;
+  dl_model_info?: Record<string, unknown>;
   evaluation_log: Record<string, unknown>;
   disclaimer: string;
+}
+
+interface TeamTrendPoint {
+  date: string;
+  rule_score: number;
+  dl_score: number;
+  blended_score: number;
+  samples: number;
+}
+
+interface TeamTrendsPayload {
+  window_days: number;
+  member_filter?: string | null;
+  members: string[];
+  series: Record<string, TeamTrendPoint[]>;
+}
+
+interface JudgeCriteriaScore {
+  technical: number;
+  ai_efficiency: number;
+  planning_practicality: number;
+  creativity: number;
+  overall: number;
 }
 
 interface AtRiskResponse {
@@ -513,6 +540,10 @@ const state: {
     /** JSON 배열: [{"source":"이름","target":"이름","weight":0-100}] */
     collaboration_edges_json: string;
     report: TeamUnifiedReport | null;
+    trends: TeamTrendsPayload | null;
+    trends_days: number;
+    trends_member: string;
+    trends_loading: boolean;
     loading: boolean;
     error: string | null;
   };
@@ -580,6 +611,10 @@ const state: {
     members: [emptyTeamMember(), emptyTeamMember()],
     collaboration_edges_json: "",
     report: null,
+    trends: null,
+    trends_days: 30,
+    trends_member: "",
+    trends_loading: false,
     loading: false,
     error: null,
   },
@@ -713,6 +748,86 @@ function teamUnifiedExportSummaryText(res: TeamUnifiedReport): string {
     if (n?.summary) lines.push(`  ${n.summary}`);
   });
   return lines.join("\n");
+}
+
+function clampScore(n: number): number {
+  return Math.max(0, Math.min(100, n));
+}
+
+function computeJudgeCriteriaScore(res: TeamUnifiedReport): JudgeCriteriaScore {
+  const avgNorm = res.scores.length
+    ? res.scores.reduce((a, s) => a + s.normalizedScore, 0) / res.scores.length
+    : 0;
+  const trustVals = Object.values(res.trust_scores || {});
+  const avgTrust = trustVals.length ? trustVals.reduce((a, x) => a + x, 0) / trustVals.length : 0;
+  const anomalyCount = (res.anomalies || []).reduce((a, x) => a + (x.flags?.length || 0), 0);
+  const explainChars = (res.analysis || []).reduce(
+    (a, x) => a + (x.summary || "").length + (x.recommended_actions || []).join(" ").length,
+    0
+  );
+  const explainDensity = res.analysis.length ? explainChars / res.analysis.length : 0;
+  const spread =
+    res.scores.length > 1
+      ? Math.max(...res.scores.map((s) => s.normalizedScore)) - Math.min(...res.scores.map((s) => s.normalizedScore))
+      : 0;
+
+  const technical = clampScore(avgNorm * 0.72 + avgTrust * 0.28 - anomalyCount * 1.1);
+  const ai_efficiency = clampScore(45 + Math.min(40, explainDensity / 6) + Math.min(15, avgTrust * 0.15));
+  const planning_practicality = clampScore(55 + Math.min(25, (res.edge_cases?.length || 0) * 6) + Math.min(20, avgTrust * 0.2));
+  const creativity = clampScore(50 + Math.min(20, spread * 0.35) + Math.min(30, explainDensity / 7));
+  const overall = clampScore(technical * 0.35 + ai_efficiency * 0.25 + planning_practicality * 0.25 + creativity * 0.15);
+  return {
+    technical: Number(technical.toFixed(1)),
+    ai_efficiency: Number(ai_efficiency.toFixed(1)),
+    planning_practicality: Number(planning_practicality.toFixed(1)),
+    creativity: Number(creativity.toFixed(1)),
+    overall: Number(overall.toFixed(1)),
+  };
+}
+
+function buildTeamEvidencePackage(res: TeamUnifiedReport): Record<string, unknown> {
+  const judge = computeJudgeCriteriaScore(res);
+  const trustVals = Object.values(res.trust_scores || {});
+  const avgTrust = trustVals.length ? trustVals.reduce((a, x) => a + x, 0) / trustVals.length : 0;
+  const avgNorm = res.scores.length
+    ? res.scores.reduce((a, s) => a + s.normalizedScore, 0) / res.scores.length
+    : 0;
+  const judge_comments: string[] = [
+    `기술 완성도 ${judge.technical.toFixed(1)}점: 정량 지표(평균 정규화 ${avgNorm.toFixed(1)})와 신뢰도(평균 ${avgTrust.toFixed(1)}) 기반으로 산출되었습니다.`,
+    `AI 활용·효율성 ${judge.ai_efficiency.toFixed(1)}점: 설명 텍스트 밀도와 규칙 기반 결과 정합성을 함께 반영했습니다.`,
+    `종합 ${judge.overall.toFixed(1)}점: 기획·실무 접합성(${judge.planning_practicality.toFixed(1)}) 및 창의성(${judge.creativity.toFixed(1)})을 포함한 가중 합산 결과입니다.`,
+  ];
+  return {
+    package_version: "team-evidence-v1",
+    submission_type: "judge-ready",
+    generated_at: new Date().toISOString(),
+    request_id: (res.evaluation_log as { request_id?: string })?.request_id ?? null,
+    judge_criteria_scores: judge,
+    judge_comments,
+    judge_criteria_rationale: {
+      input_metrics: {
+        average_normalized_score: Number(avgNorm.toFixed(2)),
+        average_trust_score: Number(avgTrust.toFixed(2)),
+        anomaly_flag_count: (res.anomalies || []).reduce((a, x) => a + (x.flags?.length || 0), 0),
+        edge_case_count: (res.edge_cases || []).length,
+      },
+      weighting_policy: {
+        technical: "avg normalized + trust - anomaly penalties",
+        ai_efficiency: "explanation density + trust",
+        planning_practicality: "edge-case coverage + trust",
+        creativity: "score spread + explanation richness",
+        overall: "0.35 technical + 0.25 ai + 0.25 planning + 0.15 creativity",
+      },
+    },
+    input_snapshot: {
+      project_name: state.team.project_name,
+      project_description: state.team.project_description,
+      evaluation_criteria: state.team.evaluation_criteria,
+      collaboration_edges_json: state.team.collaboration_edges_json,
+      members: state.team.members,
+    },
+    output_report: res,
+  };
 }
 
 async function refreshHealth(force = false): Promise<void> {
@@ -867,6 +982,7 @@ async function submitTeam(): Promise<void> {
       return;
     }
     state.team.report = data;
+    void fetchTeamTrends();
     clearTeamDraft();
   } catch (e) {
     state.team.error = e instanceof Error ? e.message : String(e);
@@ -874,6 +990,102 @@ async function submitTeam(): Promise<void> {
     state.team.loading = false;
   }
   renderSync();
+}
+
+async function fetchTeamTrends(): Promise<void> {
+  if (!state.team.report) return;
+  state.team.trends_loading = true;
+  renderSync();
+  try {
+    const q = new URLSearchParams();
+    q.set("days", String(state.team.trends_days || 30));
+    if (state.team.trends_member.trim()) q.set("member_name", state.team.trends_member.trim());
+    const r = await apiFetch(`/api/team/data/trends?${q.toString()}`);
+    const data = (await r.json()) as { status?: string; trends?: TeamTrendsPayload };
+    if (!r.ok || !data?.trends) {
+      state.team.trends = null;
+      return;
+    }
+    state.team.trends = data.trends;
+  } catch {
+    state.team.trends = null;
+  } finally {
+    state.team.trends_loading = false;
+    renderSync();
+  }
+}
+
+function trendPath(points: TeamTrendPoint[], key: "rule_score" | "dl_score" | "blended_score"): string {
+  if (!points.length) return "";
+  const w = 760;
+  const h = 220;
+  const pad = 18;
+  const step = points.length > 1 ? (w - pad * 2) / (points.length - 1) : 0;
+  return points
+    .map((p, i) => {
+      const x = pad + i * step;
+      const v = Math.max(0, Math.min(100, p[key]));
+      const y = h - pad - (v / 100) * (h - pad * 2);
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function trendInsight(points: TeamTrendPoint[]): string {
+  if (points.length < 2) return "데이터가 더 쌓이면 추세 해석이 정확해집니다.";
+  const first = points[0].blended_score;
+  const last = points[points.length - 1].blended_score;
+  const delta = last - first;
+  if (delta > 3) return `최근 혼합 점수가 +${delta.toFixed(1)} 상승해 기여 안정성이 개선되는 흐름입니다.`;
+  if (delta < -3) return `최근 혼합 점수가 ${delta.toFixed(1)} 하락해 활동/협업 지표 점검이 필요합니다.`;
+  return "최근 혼합 점수 변동이 작아 현재 기여 패턴이 비교적 안정적으로 유지됩니다.";
+}
+
+function teamTrendHtml(): string {
+  const t = state.team.trends;
+  if (!state.team.report) return "";
+  const memberOptions = [
+    `<option value="">전체</option>`,
+    ...((t?.members || state.team.report.scores.map((s) => s.member_name)).map(
+      (m) => `<option value="${escapeHtml(m)}" ${state.team.trends_member === m ? "selected" : ""}>${escapeHtml(m)}</option>`
+    )),
+  ].join("");
+  const pts =
+    t && Object.keys(t.series).length
+      ? state.team.trends_member
+        ? t.series[state.team.trends_member] || []
+        : t.series[Object.keys(t.series)[0]] || []
+      : [];
+  const pRule = trendPath(pts, "rule_score");
+  const pDl = trendPath(pts, "dl_score");
+  const pBlend = trendPath(pts, "blended_score");
+  return `
+  <section class="panel hud-panel trend-panel">
+    <div class="row-actions no-print">
+      <label class="lbl">기간
+        <select id="trend-days" class="txt">
+          <option value="30" ${state.team.trends_days === 30 ? "selected" : ""}>30일</option>
+          <option value="60" ${state.team.trends_days === 60 ? "selected" : ""}>60일</option>
+          <option value="90" ${state.team.trends_days === 90 ? "selected" : ""}>90일</option>
+        </select>
+      </label>
+      <label class="lbl">멤버
+        <select id="trend-member" class="txt">${memberOptions}</select>
+      </label>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-trend-refresh" ${state.team.trends_loading ? "disabled" : ""}>${state.team.trends_loading ? "로딩..." : "추세 갱신"}</button>
+    </div>
+    <h3 class="subh">개인 기여도 추세 (Rule / DL / Blended)</h3>
+    ${
+      pts.length
+        ? `<svg class="trend-chart" viewBox="0 0 760 220" role="img" aria-label="기여도 추세 그래프">
+        <path d="${pRule}" class="trend-line trend-line--rule"></path>
+        <path d="${pDl}" class="trend-line trend-line--dl"></path>
+        <path d="${pBlend}" class="trend-line trend-line--blend"></path>
+      </svg>
+      <p class="muted small">${escapeHtml(trendInsight(pts))}</p>`
+        : `<p class="muted small">추세 데이터가 아직 충분하지 않습니다. 팀 평가를 누적 실행하면 그래프가 표시됩니다.</p>`
+    }
+  </section>`;
 }
 
 function readAtRiskForm(): void {
@@ -1274,6 +1486,11 @@ function teamReportHtml(): string {
     <header class="report-member-head">
       <h3 class="subh">${escapeHtml(s.member_name)}</h3>
       <p class="report-summary-line"><strong>기여도(정규화)</strong> ${s.normalizedScore.toFixed(0)}점 · <strong>순위</strong> ${s.rank}/${n} (상위 ${s.top_percent.toFixed(1)}%)</p>
+      ${
+        s.dl_score != null && s.blendedScore != null
+          ? `<p class="muted small"><strong>DL 보강</strong> ${s.dl_score.toFixed(1)} · <strong>최종 혼합</strong> ${s.blendedScore.toFixed(1)} ${s.dl_confidence != null ? `(신뢰도 ${s.dl_confidence.toFixed(1)})` : ""}</p>`
+          : ""
+      }
       <p class="muted small">팀 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%</p>
       ${trust != null ? `<p class="report-trust"><strong>데이터 신뢰도</strong> <span class="score-num">${trust.toFixed(0)}</span>% <span class="muted small">(Git ${rel.git_ratio_percent.toFixed(0)}% / 자기서술 ${rel.self_report_ratio_percent.toFixed(0)}%)</span></p>` : ""}
       ${rel.note ? `<p class="muted small">⚠️ ${escapeHtml(rel.note)}</p>` : ""}
@@ -1313,14 +1530,21 @@ function teamReportHtml(): string {
   <section class="panel panel-result hud-panel team-report-root team-print-root" id="team-printable-root">
     <div class="result-toolbar no-print" role="toolbar">
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-json">JSON 내보내기</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-export-evidence">심사 제출 패키지</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-copy-summary">요약 복사</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-print">인쇄·PDF</button>
     </div>
     <h2>팀 기여도 평가 리포트</h2>
     <p class="muted small">데이터 → Score Engine → Anomaly → AI 설명 (점수는 AI가 매기지 않음)</p>
+    ${
+      rep.dl_model_info
+        ? `<p class="muted small">DL 보강 모델: ${escapeHtml(String(rep.dl_model_info.model_name ?? "enabled"))} · 혼합식 0.7*Rule + 0.3*DL</p>`
+        : ""
+    }
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
     ${edgeCases}
     <div class="report-flow">${scoreSections}</div>
+    ${teamTrendHtml()}
     <p class="footer-note muted small">${escapeHtml(rep.disclaimer)}</p>
   </section>`;
 }
@@ -1865,6 +2089,14 @@ function wire(): void {
     URL.revokeObjectURL(a.href);
   });
 
+  document.getElementById("btn-team-export-evidence")?.addEventListener("click", () => {
+    const r = state.team.report;
+    if (!r) return;
+    const payload = buildTeamEvidencePackage(r);
+    const safe = (state.team.project_name || "team-evidence").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+    downloadJsonExport(`${safe}-judge-evidence`, payload);
+  });
+
   document.getElementById("btn-team-copy-summary")?.addEventListener("click", async () => {
     const r = state.team.report;
     if (!r) return;
@@ -1878,6 +2110,14 @@ function wire(): void {
 
   document.getElementById("btn-team-print")?.addEventListener("click", () => {
     window.print();
+  });
+
+  document.getElementById("btn-trend-refresh")?.addEventListener("click", () => {
+    const d = document.getElementById("trend-days") as HTMLSelectElement | null;
+    const m = document.getElementById("trend-member") as HTMLSelectElement | null;
+    if (d) state.team.trends_days = parseInt(d.value, 10) || 30;
+    if (m) state.team.trends_member = m.value;
+    void fetchTeamTrends();
   });
 
   document.getElementById("btn-ar-run")?.addEventListener("click", () => {

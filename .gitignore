@@ -10,3 +10,5 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 .pytest_cache/
+backend/edu_tools/data/*.db
+backend/edu_tools/data/*_dataset.jsonl

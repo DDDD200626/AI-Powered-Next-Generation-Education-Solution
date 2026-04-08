@@ -2440,3 +2440,33 @@ body::before {
   margin: 0.35rem 0 0;
   padding-left: 1.1rem;
 }
+
+.trend-panel {
+  margin-top: 1rem;
+}
+
+.trend-chart {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.01);
+}
+
+.trend-line {
+  fill: none;
+  stroke-width: 2.4;
+}
+
+.trend-line--rule {
+  stroke: #8aa8e8;
+}
+
+.trend-line--dl {
+  stroke: #58d7a1;
+}
+
+.trend-line--blend {
+  stroke: var(--accent);
+  stroke-width: 2.8;
+}
