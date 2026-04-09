@@ -1311,6 +1311,23 @@ function promotionGateHtml(rep: TeamUnifiedReport): string {
   </section>`;
 }
 
+function promotionGateBannerHtml(rep: TeamUnifiedReport): string {
+  const info = (rep.dl_model_info as { quality?: { promotion_gate?: PromotionGateInfo } } | undefined)
+    ?.quality?.promotion_gate;
+  if (!info || info.accepted) return "";
+  const reasons = (info.reasons || []).filter((x) => typeof x === "string");
+  const reasonText = reasons.length ? reasons.join(", ") : "metrics_regressed";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">승격 차단 알림</h3>
+    <p><span class="pill pill-warn">DEPLOY BLOCKED</span> <strong>신규 DL 모델 승격이 차단되었습니다.</strong></p>
+    <p class="muted small">사유: ${escapeHtml(reasonText)}</p>
+    <div class="row-actions no-print">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-promote-hint">재학습 권고 문구 복사</button>
+    </div>
+  </section>`;
+}
+
 function whatIfSimulatorHtml(rep: TeamUnifiedReport): string {
   const names = rep.scores.map((s) => s.member_name);
   const selected = state.team.what_if.member_name || names[0] || "";
@@ -1823,6 +1840,7 @@ function teamReportHtml(): string {
         : ""
     }
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
+    ${promotionGateBannerHtml(rep)}
     ${confidenceGateHtml(rep)}
     ${promotionGateHtml(rep)}
     ${edgeCases}
@@ -2402,6 +2420,26 @@ function wire(): void {
 
   document.getElementById("btn-team-print")?.addEventListener("click", () => {
     window.print();
+  });
+
+  document.getElementById("btn-copy-promote-hint")?.addEventListener("click", async () => {
+    const rep = state.team.report;
+    if (!rep) return;
+    const pg = (rep.dl_model_info as { quality?: { promotion_gate?: PromotionGateInfo } } | undefined)
+      ?.quality?.promotion_gate;
+    if (!pg || pg.accepted) return;
+    const rs = (pg.reasons || []).join(", ");
+    const msg = [
+      "[DL 재학습 권고]",
+      "신규 모델 승격이 차단되었습니다.",
+      `사유: ${rs || "metrics_regressed"}`,
+      "권고: 학습 데이터 품질(결측/이상치), 홀드아웃 분포, 하이퍼파라미터 범위를 재점검 후 재학습하세요.",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(msg);
+    } catch {
+      /* ignore */
+    }
   });
 
   document.getElementById("btn-team-recheck")?.addEventListener("click", () => {
