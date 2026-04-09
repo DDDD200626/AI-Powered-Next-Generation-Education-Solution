@@ -33,6 +33,7 @@ from edu_tools.team_ml_model import (
     train_if_needed,
 )
 from edu_tools.team_web_priors import get_web_priors
+from edu_tools.team_lm_embedding import semantic_encoder_meta
 from edu_tools.team_torch_model import (
     TORCH_MODEL_PATH,
     predict_torch_score,
@@ -226,7 +227,7 @@ def _contest_transparency_pack(
         "rubric_alignment_ko": rubric_hooks,
         "limitations_ko": limitations,
         "signals_disclosed_ko": [
-            "26차원 결정론적 피처(커밋·PR·라인·출석·서술·팀 상대 지표·과거 이력·텍스트 형태·에세이 깊이·Git 균형 등)",
+            "34차원 피처(tabular + 선택적 다국어 문장 임베딩 8차원): 커밋·PR·라인·출석·서술·팀 상대 지표·과거 이력·텍스트 형태·에세이 깊이·Git 균형 등",
             "선택적 웹 사전(priors)으로 소폭 보정(상한 있음)",
         ],
         "quality_snapshot": quality,
@@ -734,6 +735,7 @@ def apply_dl_scores(
             "feature_drift": drift_info,
             "explainability_snapshot": ex_snap,
             "operations_playbook": ops_pb,
+            "semantic_encoder": semantic_encoder_meta(),
         },
         "web_priors": priors_meta,
         "input_features": FEATURE_LABELS,
@@ -767,6 +769,7 @@ def apply_dl_scores(
                 "feature_drift": drift_info,
                 "explainability_snapshot": ex_snap,
                 "operations_playbook": ops_pb,
+                "semantic_encoder": semantic_encoder_meta(),
             },
             target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
         ),

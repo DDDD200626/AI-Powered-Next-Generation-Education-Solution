@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from edu_tools.dl_roadmap import build_dl_quality_unified
+from edu_tools.team_lm_embedding import LM_EXTRA_DIM, embed8_self_report
 from edu_tools.team_torch_model import _promotion_gate_decision
 
 
@@ -18,6 +21,13 @@ def test_promotion_gate_rejects_when_candidate_regresses() -> None:
     ok, reasons = _promotion_gate_decision(prev, cand)
     assert ok is False
     assert "validation_mae_regressed" in reasons or "holdout_mae_regressed" in reasons
+
+
+def test_semantic_encoder_off_returns_zeros(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEAM_SEMANTIC_ENCODER", "0")
+    v = embed8_self_report("한글 자기서술 텍스트입니다.")
+    assert len(v) == LM_EXTRA_DIM
+    assert all(x == 0.0 for x in v)
 
 
 def test_dl_quality_unified_v4_includes_explainability() -> None:

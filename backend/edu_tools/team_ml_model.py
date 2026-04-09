@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from edu_tools.team_lm_embedding import embed8_self_report
+
 DATA_DIR = Path(__file__).with_name("data")
 DATASET_PATH = DATA_DIR / "team_ml_dataset.jsonl"
 MODEL_PATH = DATA_DIR / "team_ml_model.json"
@@ -18,9 +20,9 @@ MODEL_PATH = DATA_DIR / "team_ml_model.json"
 MIN_TRAIN_SAMPLES = 40
 RETRAIN_INTERVAL = 20
 
-# 확장 피처 + 복합 타깃 + DB 이력 + 자기서술 형태(한계 돌파)
-FEATURE_VERSION = 5
-FEATURE_DIM = 26
+# 확장 피처 + 복합 타깃 + DB 이력 + 자기서술 형태 + 선택적 문장 임베딩(v6)
+FEATURE_VERSION = 6
+FEATURE_DIM = 34
 # hybrid_dl_target 정의(저장 라벨과 함께 기록) — 바꾸면 과거 행과 혼합 시 주의
 LABEL_SPEC_VERSION = 1
 STRUCTURAL_TARGET_WEIGHT = 0.42
@@ -99,6 +101,15 @@ FEATURE_LABELS = [
     "text_newline_density",
     "text_digit_ratio",
     "text_long_token_ratio",
+    # TEAM_SEMANTIC_ENCODER=1 일 때만 비영(의미); 0이면 0으로 채움
+    "lm_semantic_e0",
+    "lm_semantic_e1",
+    "lm_semantic_e2",
+    "lm_semantic_e3",
+    "lm_semantic_e4",
+    "lm_semantic_e5",
+    "lm_semantic_e6",
+    "lm_semantic_e7",
 ]
 
 
@@ -228,7 +239,7 @@ def build_feature_vector(
         hd,
         essay_depth,
         rel_git_balance,
-    ] + txt
+    ] + txt + embed8_self_report(self_report)
     assert len(vec) == FEATURE_DIM
     return vec
 

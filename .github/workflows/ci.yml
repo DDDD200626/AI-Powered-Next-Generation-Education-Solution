@@ -10,6 +10,8 @@ jobs:
   backend:
     # ubuntu-latest(24.04)에서 시스템 파이썬/PEP668 이슈를 피하고, 러너 업데이트 시에도 휠 호환을 맞추기 쉽게 22.04 고정
     runs-on: ubuntu-22.04
+    env:
+      TEAM_SEMANTIC_ENCODER: "0"
     defaults:
       run:
         shell: bash

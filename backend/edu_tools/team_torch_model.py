@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from edu_tools.dl_roadmap import ROADMAP_VERSION, build_dl_quality_unified
+from edu_tools.team_lm_embedding import semantic_encoder_meta
 from edu_tools.team_ml_model import (
     DATASET_PATH,
     FEATURE_DIM,
@@ -1110,6 +1111,7 @@ def train_torch_if_needed() -> dict[str, Any]:
         "holdout_time_note_ko": holdout_time_note_ko,
         "input_noise_std_training": round(float(input_noise_std), 6),
         "permutation_importance_top": perm_top,
+        "semantic_encoder": semantic_encoder_meta(),
     }
     out_meta["dl_quality_unified"] = build_dl_quality_unified(out_meta)
     promote_ok, promote_reasons = _promotion_gate_decision(meta, out_meta)

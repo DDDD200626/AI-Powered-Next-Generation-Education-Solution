@@ -1315,6 +1315,7 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
   const dl = rep.dl_model_info as
     | {
         quality?: {
+          semantic_encoder?: { enabled?: boolean; model_id?: string | null; note_ko?: string };
           operations_playbook?: {
             recommendation_level?: string;
             summary_ko?: string;
@@ -1330,7 +1331,8 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
     | undefined;
   const pb = dl?.quality?.operations_playbook;
   const ex = dl?.quality?.explainability_snapshot;
-  if (!pb && !ex) return "";
+  const sem = dl?.quality?.semantic_encoder;
+  if (!pb && !ex && !sem) return "";
   const lvl = (pb?.recommendation_level || "ok").toLowerCase();
   const pill =
     lvl === "action" ? "pill-warn" : lvl === "watch" ? "pill-muted" : "pill-on";
@@ -1355,9 +1357,16 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
     typeof ex?.input_noise_std_training === "number" && ex.input_noise_std_training > 0
       ? `<p class="muted small">학습 입력 노이즈 σ=${ex.input_noise_std_training}</p>`
       : "";
+  const semLine =
+    sem && typeof sem === "object"
+      ? `<p class="muted small">문장 임베딩(거대 인코더): <strong>${sem.enabled ? "사용" : "미사용"}</strong>${
+          sem.model_id ? ` · ${escapeHtml(String(sem.model_id))}` : ""
+        }</p>`
+      : "";
   return `
   <section class="panel hud-panel">
     <h3 class="subh">DL 설명 · 운영 권고</h3>
+    ${semLine}
     ${
       pb
         ? `<p><span class="pill ${pill}">${escapeHtml(label)}</span> <span class="muted small">recommendation_level=${escapeHtml(lvl)}</span></p>

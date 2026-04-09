@@ -13,7 +13,7 @@ PHASES_KO: tuple[str, ...] = (
     "1) 데이터 늘리기 — JSONL 누적·TEAM_TRAIN_RESERVOIR_MAX·합성 배치(team_synthetic_bulk)",
     "2) 라벨 정의 고정 — hybrid_dl_target·STRUCTURAL_TARGET_WEIGHT·행에 label_spec_version·feature_version 기록",
     "3) 이상 샘플 정리 — TEAM_TRAIN_OUTLIER_IQR_K 로 라벨 y IQR 밖 행 제거(학습 행 부족 시 자동 유지)",
-    "4) 피처 확장 — FEATURE_VERSION·26차원 build_feature_vector(에세이 깊이·Git 균형 등 비식별 신호)",
+    "4) 피처 확장 — FEATURE_VERSION·34차원 build_feature_vector(형태 신호 + 선택적 다국어 문장 임베딩 8차원)",
     "5) 시간 홀드아웃 — TEAM_HOLDOUT_TIME_FRAC 로 최근 구간을 학습에서 제외·holdout_time_mae/pearson/r2 기록",
     "6) 세션 CV·앙상블 — 동일 sess 누수 방지·PyTorch MLP 앙상블·MC 드롭아웃·GBDT 블렌드",
     "7) 하이퍼 탐색 확대 — TEAM_TORCH_EXTENDED_HP=1 시 그리드 변형 후보 추가(시간↑)",
