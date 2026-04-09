@@ -87,11 +87,27 @@ def test_capabilities_contest_rubric() -> None:
     assert "ai_efficiency" in rub
     assert "planning_practical" in rub
     assert "creativity" in rub
+    assert "deep_learning_assist" in rub
+    assert data.get("dl_roadmap", {}).get("phase_count") == 10
+    assert data.get("dl_roadmap", {}).get("version") == 5
+    assert data.get("dl_roadmap", {}).get("scope_note_ko")
+    csp = data.get("contest_submission_pack") or {}
+    assert csp.get("verification_order")
+    assert csp.get("json_paths", {}).get("dl_quality_unified")
     assert data["endpoints"]["team_evaluate"] == "POST /api/team/evaluate"
     assert data["endpoints"].get("observability") == "GET /api/observability"
     assert data["endpoints"].get("ready") == "GET /api/ready"
     assert data["endpoints"].get("perf_recent") == "GET /api/perf/recent"
+    assert data["endpoints"].get("team_dataset_label_summary") == "GET /api/team/data/dataset-label-summary"
     assert r.headers.get("X-Request-ID")
+
+
+def test_dataset_label_summary_ok() -> None:
+    r = client.get("/api/team/data/dataset-label-summary")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("status") == "ok"
+    assert "lines_scanned" in (body.get("stats") or {})
 
 
 def test_rubric_draft_heuristic_returns_criteria() -> None:
@@ -163,6 +179,8 @@ def test_team_evaluate_heuristic_has_creative_insights() -> None:
     assert data["rubric_report"]["members"]
     assert "evaluation_trust" in data
     assert data["evaluation_trust"]["level_ko"]
+    assert "dl_model_info" in data and isinstance(data["dl_model_info"], dict)
+    assert "members" in data and "dl_score" in data["members"][0]
     assert "team_risk" in data
     assert "improvement_chain" in data
     assert data["improvement_chain"]["items"]
@@ -265,3 +283,9 @@ def test_team_report_unified_pipeline() -> None:
     assert "rawScore" in s0 and "normalizedScore" in s0 and "rank" in s0
     assert "breakdown" in s0
     assert r.headers.get("X-Request-ID")
+    dl = data.get("dl_model_info") or {}
+    assert "contest_transparency" in dl
+    ct = dl["contest_transparency"]
+    assert ct.get("blend_formula")
+    assert "limitations_ko" in ct and isinstance(ct["limitations_ko"], list)
+    assert ct.get("rubric_alignment_ko")

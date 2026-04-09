@@ -64,11 +64,27 @@ flowchart LR
 
 ---
 
+## 5. 딥러닝 기여도 보강 — 심사 대응(투명성 패키지)
+
+| 심사 관점 | 본 프로젝트의 근거 | 확인 방법 |
+|-----------|-------------------|-----------|
+| 기술적 완성도 | 피처 버전·입력 차원·(가능 시) CV/검증 MAE·앙상블·보정 계수가 **`dl_model_info.quality`** 및 **`contest_transparency.quality_snapshot`**에 노출 | `POST /api/team/report` JSON |
+| AI 효율 | PyTorch MLP 앙상블 + MC 드롭아웃 불확실도, 경량 선형 폴백, **배치 추론** | `edu_tools/team_torch_model.py`, 응답 `dl_confidence` |
+| 실무·윤리 | **고정 블렌드**(룰 70% + DL 30%)·한계 문구·교육자 우선 | `dl_model_info.contest_transparency.limitations_ko`, README·`disclaimer` |
+| 창의성 | 세션 순위 보조·과거 이력 사전·서술 형태 피처 등 **룰 외 신호** | `beyond_rule_signals`, `dl_top_factors` |
+| 심사 가산(검증 편의) | `GET /api/capabilities` → **`contest_submission_pack`** — 심사 순서·`dl_model_info` JSON 경로·저장소 증빙 목록 | capabilities JSON 한 번으로 경로 확인 |
+
+- **기계 판독**: `GET /api/capabilities` → `rubric.deep_learning_assist`
+- **제출 증빙**: 응답 필드 `dl_model_info.contest_transparency`
+- **검증 루트 고정**: `GET /api/capabilities` → `contest_submission_pack` (`verification_order`, `json_paths`)
+
+---
+
 ## 심사위원용 빠른 확인 API
 
 - `GET /api/health` — 상태·버전·AI 키 설정
 - `GET /api/version` — 앱 메타
-- `GET /api/capabilities` — **심사 4축 요약·엔드포인트 목록** (기계 판독용 JSON)
+- `GET /api/capabilities` — **심사 4축 요약·엔드포인트 목록** (기계 판독용 JSON), **`contest_submission_pack`**(심사위원 검증 순서·JSON 경로)
 - `GET /api/observability` — 업타임·환경·런타임 메타 (관측성)
 - `GET /api/ready` · `GET /api/live` — 배포·K8s 스타일 헬스 프로브
 

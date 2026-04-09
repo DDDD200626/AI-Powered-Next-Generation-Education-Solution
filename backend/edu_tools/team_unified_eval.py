@@ -17,17 +17,25 @@ from typing import Any
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from edu_tools.team_data_store import db_profile, record_team_report
+from edu_tools.dl_roadmap import roadmap_payload
+from edu_tools.team_data_store import db_profile, member_history_features, record_team_report
 from edu_tools.team_ml_model import (
+    FEATURE_LABELS,
+    FEATURE_VERSION,
+    LABEL_SPEC_VERSION,
+    STRUCTURAL_TARGET_WEIGHT,
     append_samples,
-    feature_row,
+    build_feature_vector,
+    hybrid_dl_target,
     load_model,
     predict_score,
     train_if_needed,
 )
 from edu_tools.team_web_priors import get_web_priors
 from edu_tools.team_torch_model import (
+    TORCH_MODEL_PATH,
     predict_torch_score,
+    predict_torch_scores_batched,
     torch_available,
     torch_model_meta,
     train_torch_if_needed,
@@ -170,6 +178,65 @@ def _median(vals: list[float]) -> float:
     return float(a[m]) if n % 2 else (float(a[m - 1]) + float(a[m])) / 2.0
 
 
+def _contest_transparency_pack(
+    *,
+    enabled: bool,
+    backend: str,
+    blend_formula: str,
+    sample_count: int | None,
+    use_torch: bool,
+    quality: dict[str, Any],
+    target_mix: str,
+) -> dict[str, Any]:
+    """공모전 심사용: 딥러닝 보조 신호의 역할·한계·재현 힌트를 한 번에 제시."""
+    rubric_hooks = {
+        "technical_completeness_ko": (
+            "피처 버전·입력 차원·(가능 시) 교차검증 MAE·앙상블·선형 보정 계수·불확실도 샘플 수를 "
+            "`dl_model_info.quality`에 노출하고, CV·tail·NN+GBDT 블렌드·calibration은 "
+            "`quality.dl_quality_unified` 한 객체로도 요약됨."
+        ),
+        "ai_efficiency_ko": (
+            "PyTorch MLP 앙상블(+ MC 드롭아웃 불확실도)과 경량 선형 폴백을 단계적으로 사용하고, "
+            "팀 단위 배치 추론으로 호출 비용을 줄임."
+        ),
+        "planning_practical_ko": (
+            "최종 화면 점수는 규칙 엔진 정규화 점수와 DL 보조 점수를 고정 비율로 블렌드하며, "
+            "교육 현장의 ‘참고·보조’ 용도임을 응답 disclaimer와 함께 명시."
+        ),
+        "creativity_ko": (
+            "세션 내 순위 보조 학습, 과거 평가 이력 사전, 서술 형태 피처 등 룰만으로 잡기 어려운 신호를 결합."
+        ),
+    }
+    limitations = [
+        "입력은 집계된 Git 수치·출석·자기서술 텍스트 형태 특성 등으로, 코드 품질·리뷰 내용을 직접 이해하지는 않습니다.",
+        "팀·과제마다 분포가 달라 절대 점수 비교에는 한계가 있습니다.",
+        "데이터가 적을 때는 선형 모델 또는 룰 점수에 가깝게 동작할 수 있습니다.",
+        "최종 성적·징계·인사 결정을 자동 대체하지 않으며, 교육자 판단이 우선입니다.",
+    ]
+    return {
+        "purpose_ko": "규칙 기반 점수를 보조하는 데이터 학습 신호(참고용)",
+        "blend_formula": blend_formula,
+        "target_mix_for_training_ko": target_mix,
+        "feature_version": FEATURE_VERSION,
+        "backend_reported": backend,
+        "pytorch_in_use": use_torch,
+        "enabled": enabled,
+        "sample_count_at_run": sample_count,
+        "rubric_alignment_ko": rubric_hooks,
+        "limitations_ko": limitations,
+        "signals_disclosed_ko": [
+            "26차원 결정론적 피처(커밋·PR·라인·출석·서술·팀 상대 지표·과거 이력·텍스트 형태·에세이 깊이·Git 균형 등)",
+            "선택적 웹 사전(priors)으로 소폭 보정(상한 있음)",
+        ],
+        "quality_snapshot": quality,
+        "verification_hints_ko": [
+            "GET /api/capabilities — 심사 4축·엔드포인트 목록",
+            "POST /api/team/report — scores[].dl_score, dl_confidence, dl_top_factors, dl_model_info",
+            "docs/CONTEST_RUBRIC.md — 근거 경로",
+        ],
+    }
+
+
 def _scaled_by_team(value: float, base: float, cap_mult: float = 2.5) -> float:
     m = max(base, 1e-6)
     return min(100.0, 100.0 * min(cap_mult, value / m) / cap_mult)
@@ -261,48 +328,123 @@ def run_score_engine(users: list[TeamUserIn]) -> tuple[list[ScoreResult], dict[s
     return out, trust
 
 
-def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[str, Any]:
+def apply_dl_scores(
+    users: list[TeamUserIn],
+    scores: list[ScoreResult],
+    request_id: str = "",
+    *,
+    learning: bool = True,
+) -> dict[str, Any]:
     """학습 데이터 기반 ML 보강 점수.
 
-    - 요청마다 (feature, target=normalizedScore) 샘플을 누적
+    - 요청마다 (확장 feature, 복합 target=순위점수+절대활동) 샘플을 누적
     - 샘플 수가 쌓이면 자동 재학습
     - 저장된 최신 모델로 dl_score 산출
     """
     if not users or not scores:
-        return {"model_name": "team-ml", "enabled": False}
+        return {
+            "model_name": "team-ml",
+            "enabled": False,
+            "dl_roadmap": roadmap_payload(),
+            "contest_transparency": _contest_transparency_pack(
+                enabled=False,
+                backend="none",
+                blend_formula="0.7*normalizedScore + 0.3*dl_score",
+                sample_count=None,
+                use_torch=False,
+                quality={},
+                target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
+            ),
+        }
 
     priors, priors_meta = get_web_priors()
-    samples: list[dict[str, Any]] = []
-    for u, s in zip(users, scores):
-        x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
-        samples.append(
-            {
+    m_c = _median([float(u.commits) for u in users])
+    m_p = _median([float(u.prs) for u in users])
+    m_l = _median([float(u.lines) for u in users])
+    m_a = _median([float(u.attendance) for u in users])
+    m_w = _median([float(_word_count(u.selfReport)) for u in users])
+    team_n = len(users)
+    hist_cache: dict[str, tuple[float, float, float]] = {
+        u.name.strip(): member_history_features(u.name.strip()) for u in users
+    }
+
+    if learning:
+        samples: list[dict[str, Any]] = []
+        for u, s in zip(users, scores):
+            hb, hr, hd = hist_cache[u.name.strip()]
+            x = build_feature_vector(
+                u.commits,
+                u.prs,
+                u.lines,
+                u.attendance,
+                u.selfReport,
+                member_rank=int(s.rank),
+                team_size=team_n,
+                median_commits=m_c,
+                median_prs=m_p,
+                median_lines=m_l,
+                median_attendance=m_a,
+                median_words=m_w,
+                hist_blend=hb,
+                hist_rule=hr,
+                hist_density=hd,
+            )
+            y = hybrid_dl_target(
+                float(s.normalizedScore),
+                u.commits,
+                u.prs,
+                u.lines,
+                u.attendance,
+                u.selfReport,
+            )
+            row: dict[str, Any] = {
                 "x": x,
-                "y": float(s.normalizedScore),
+                "y": y,
                 "member": u.name.strip(),
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "feature_version": FEATURE_VERSION,
+                "label_spec_version": LABEL_SPEC_VERSION,
+                "structural_weight": STRUCTURAL_TARGET_WEIGHT,
             }
-        )
-    append_samples(samples)
+            if request_id:
+                row["sess"] = request_id
+            samples.append(row)
+        append_samples(samples)
 
-    # 1) Prefer PyTorch deep model when available
-    torch_info = train_torch_if_needed()
-    use_torch = torch_available() and not (torch_info.get("enabled") is False)
+        # 1) Prefer PyTorch deep model when available
+        torch_info = train_torch_if_needed()
+        use_torch = torch_available() and not (torch_info.get("enabled") is False)
 
-    # 2) Fallback lightweight model
-    train_info = train_if_needed()
-    model = load_model()
+        # 2) Fallback lightweight model
+        train_info = train_if_needed()
+        model = load_model()
+    else:
+        torch_info = {}
+        train_info = {}
+        model = load_model()
+        use_torch = bool(torch_available() and TORCH_MODEL_PATH.is_file())
     if not model and not use_torch:
         for s in scores:
             s.dl_score = None
             s.dl_confidence = None
             s.blendedScore = float(s.normalizedScore)
+        sc = int(train_info.get("sample_count", 0) or 0)
         return {
             "model_name": "team-ml",
             "enabled": False,
             "reason": "model_not_ready",
-            "sample_count": train_info.get("sample_count", 0),
+            "sample_count": sc,
             "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+            "dl_roadmap": roadmap_payload(),
+            "contest_transparency": _contest_transparency_pack(
+                enabled=False,
+                backend="none",
+                blend_formula="0.7*normalizedScore + 0.3*dl_score",
+                sample_count=sc,
+                use_torch=False,
+                quality={"note_ko": "학습 표본 부족 등으로 모델 미가동"},
+                target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
+            ),
         }
 
     base_samples = 0
@@ -311,12 +453,56 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
     elif model:
         base_samples = int(model.sample_count)
     conf_base = max(35.0, min(95.0, 40.0 + base_samples * 0.6))
+    xs: list[list[float]] = []
     for u, s in zip(users, scores):
-        x = feature_row(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+        hb, hr, hd = hist_cache[u.name.strip()]
+        xs.append(
+            build_feature_vector(
+                u.commits,
+                u.prs,
+                u.lines,
+                u.attendance,
+                u.selfReport,
+                member_rank=int(s.rank),
+                team_size=team_n,
+                median_commits=m_c,
+                median_prs=m_p,
+                median_lines=m_l,
+                median_attendance=m_a,
+                median_words=m_w,
+                hist_blend=hb,
+                hist_rule=hr,
+                hist_density=hd,
+            )
+        )
+    batch_torch = predict_torch_scores_batched(xs) if use_torch else None
+    for i, (u, s) in enumerate(zip(users, scores)):
+        hb, hr, hd = hist_cache[u.name.strip()]
+        x = xs[i]
         dl_score = None
         dl_uncertainty = None
         if use_torch:
-            pred = predict_torch_score(u.commits, u.prs, u.lines, u.attendance, u.selfReport)
+            pred = None
+            if batch_torch is not None and i < len(batch_torch):
+                pred = batch_torch[i]
+            if pred is None:
+                pred = predict_torch_score(
+                    u.commits,
+                    u.prs,
+                    u.lines,
+                    u.attendance,
+                    u.selfReport,
+                    member_rank=int(s.rank),
+                    team_size=team_n,
+                    median_commits=m_c,
+                    median_prs=m_p,
+                    median_lines=m_l,
+                    median_attendance=m_a,
+                    median_words=m_w,
+                    hist_blend=hb,
+                    hist_rule=hr,
+                    hist_density=hd,
+                )
             if pred is not None:
                 dl_score = float(pred.get("score", 0.0))
                 dl_uncertainty = float(pred.get("uncertainty", 0.0))
@@ -330,14 +516,33 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         att_gap = x[3] - (priors["attendance_expectation"] / 100.0)
         prior_delta = (commit_gap * 5.0) + (pr_gap * 4.0) + (att_gap * 3.0)
         dl_score = max(0.0, min(100.0, dl_score + prior_delta))
-        # Explainability: feature impact ranking (simple, stable)
-        factors = [
+        # Explainability: 베이스 지표 + 팀 상대 지표 중 영향 큰 순
+        pri = [
             ("커밋 활동", x[0] - (priors["commit_expectation"] / 100.0)),
             ("PR 협업", x[1] - (priors["pr_expectation"] / 100.0)),
             ("코드 변화량", x[2] - (priors["lines_expectation"] / 100.0)),
             ("출석/참여", x[3] - (priors["attendance_expectation"] / 100.0)),
             ("자기서술 밀도", x[4] - (priors["self_report_words_expectation"] / 100.0)),
         ]
+        rel = [
+            (FEATURE_LABELS[9], x[9]),
+            (FEATURE_LABELS[10], x[10]),
+            (FEATURE_LABELS[11], x[11]),
+            (FEATURE_LABELS[12], x[12]),
+        ]
+        hist = [
+            ("과거 평가(블렌드) 사전", x[16] - 0.5),
+            ("과거 평가(룰) 사전", x[17] - 0.5),
+            ("과거 평가 빈도", x[18] - 0.5),
+        ]
+        txt_feats = [
+            ("서술 고유어 비율", x[19] - 0.5),
+            ("서술 글자/단어 밀도", x[20] - 0.5),
+            ("서술 줄바꿈 밀도", x[21] - 0.5),
+            ("서술 숫자 비율", x[22] - 0.5),
+            ("서술 장단어 비율", x[23] - 0.5),
+        ]
+        factors = pri + rel + hist + txt_feats
         top = sorted(factors, key=lambda t: abs(t[1]), reverse=True)[:3]
         s.dl_top_factors = [f"{name} {'+' if val >= 0 else '-'}" for name, val in top]
         # 입력 다양도 기반 confidence 보정
@@ -361,17 +566,65 @@ def apply_dl_scores(users: list[TeamUserIn], scores: list[ScoreResult]) -> dict[
         "backend": "pytorch" if use_torch else "lightweight-linear",
         "quality": {
             "validation_mae_mean": meta.get("validation_mae_mean") if use_torch else None,
+            "cv_mae_mean": meta.get("cv_mae_mean") if use_torch else None,
             "ensemble_size": meta.get("ensemble_size") if use_torch else None,
+            "best_hparams": meta.get("best_hparams") if use_torch else None,
+            "best_architecture": meta.get("best_architecture") if use_torch else None,
+            "calibration": meta.get("calibration") if use_torch else None,
+            "calibration_pearson_r": meta.get("calibration_pearson_r") if use_torch else None,
+            "calibration_r2": meta.get("calibration_r2") if use_torch else None,
+            "holdout_time_mae": meta.get("holdout_time_mae") if use_torch else None,
+            "holdout_time_pearson_r": meta.get("holdout_time_pearson_r") if use_torch else None,
+            "holdout_time_r2": meta.get("holdout_time_r2") if use_torch else None,
+            "label_spec_version": meta.get("label_spec_version") if use_torch else None,
+            "feature_version": meta.get("feature_version") if use_torch else None,
+            "input_dim": meta.get("input_dim") if use_torch else None,
+            "cv_vs_validation_gap": meta.get("cv_vs_validation_gap") if use_torch else None,
+            "chronological_tail_mae_mean": meta.get("chronological_tail_mae_mean") if use_torch else None,
+            "model_size_profile": meta.get("model_size_profile") if use_torch else None,
+            "approx_parameters": meta.get("approx_parameters") if use_torch else None,
+            "mc_dropout_samples": meta.get("mc_dropout_samples") if use_torch else None,
+            "gbdt_present": meta.get("gbdt_present") if use_torch else None,
+            "nn_gbdt_blend_alpha": meta.get("nn_gbdt_blend_alpha") if use_torch else None,
+            "gbdt_validation_blend_mae": meta.get("gbdt_validation_blend_mae") if use_torch else None,
+            "cv_split_strategy": meta.get("cv_split_strategy") if use_torch else None,
+            "cv_unique_groups": meta.get("cv_unique_groups") if use_torch else None,
+            "dataset_file_sha256": meta.get("dataset_file_sha256") if use_torch else None,
+            "gbdt_top_features": meta.get("gbdt_top_features") if use_torch else None,
+            "dl_roadmap_version": meta.get("dl_roadmap_version") if use_torch else None,
+            "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
         },
         "web_priors": priors_meta,
-        "input_features": [
-            "log_commits",
-            "log_prs",
-            "log_lines",
-            "attendance_norm",
-            "log_self_report_words",
+        "input_features": FEATURE_LABELS,
+        "target_mix": f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
+        "beyond_rule_signals": [
+            "sqlite_member_history_prior",
+            "session_pairwise_ranking_aux",
+            "sklearn_histgradientboosting_blend_with_nn",
         ],
         "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+        "dl_roadmap": roadmap_payload(),
+        "contest_transparency": _contest_transparency_pack(
+            enabled=True,
+            backend="pytorch" if use_torch else "lightweight-linear",
+            blend_formula="0.7*normalizedScore + 0.3*dl_score",
+            sample_count=(
+                int(meta.get("sample_count") or 0)
+                if use_torch
+                else int((model.sample_count if model else 0) or 0)
+            ),
+            use_torch=use_torch,
+            quality={
+                "validation_mae_mean": meta.get("validation_mae_mean") if use_torch else None,
+                "cv_mae_mean": meta.get("cv_mae_mean") if use_torch else None,
+                "ensemble_size": meta.get("ensemble_size") if use_torch else None,
+                "calibration": meta.get("calibration") if use_torch else None,
+                "feature_version": int(meta.get("feature_version") or FEATURE_VERSION) if use_torch else FEATURE_VERSION,
+                "input_dim": int(meta.get("input_dim") or len(FEATURE_LABELS)) if use_torch else len(FEATURE_LABELS),
+                "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
+            },
+            target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
+        ),
     }
 
 
@@ -504,13 +757,13 @@ def run_ai_analyzer(
 @router.post("/report", response_model=TeamReportResponse)
 def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
     users = body.teamData
+    req_id = str(uuid.uuid4())
     scores, trust = run_score_engine(users)
-    dl_model_info = apply_dl_scores(users, scores)
+    dl_model_info = apply_dl_scores(users, scores, request_id=req_id)
     anomalies = run_anomaly_detector(users, scores)
     analysis = run_ai_analyzer(users, scores, anomalies)
     edge_cases = detect_edge_cases(users, scores)
 
-    req_id = str(uuid.uuid4())
     ts = datetime.now(timezone.utc).isoformat()
     input_data = [u.model_dump() for u in users]
     input_blob = json.dumps(input_data, ensure_ascii=False, sort_keys=True)
@@ -550,3 +803,11 @@ def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
         dl_model_info=dl_model_info,
         evaluation_log=evaluation_log,
     )
+
+
+@router.post("/benchmark-narrow")
+def post_benchmark_narrow(body: TeamReportRequest) -> dict[str, Any]:
+    """좁은 과제: 룰 기준점 대비 전용 DL vs OpenAI 단일 호출 MAE 비교(데이터 누적·재학습 없음)."""
+    from edu_tools.team_llm_benchmark import run_narrow_benchmark
+
+    return run_narrow_benchmark(body)

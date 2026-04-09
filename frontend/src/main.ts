@@ -51,6 +51,7 @@ function apiFetch(path: string, init?: RequestInit & { timeoutMs?: number }): Pr
 }
 
 type SiteView =
+  | "home"
   | "hub"
   | "analyze"
   | "team"
@@ -617,7 +618,7 @@ const state: {
     error: string | null;
   };
 } = {
-  view: "team",
+  view: "home",
   course_name: "",
   student_or_group_label: "",
   weekly_study_hours: "",
@@ -1571,14 +1572,15 @@ function navHtml(): string {
   return `
   <header class="site-header site-header--glass">
     <div class="nav-inner">
-      <a href="#" class="brand brand-mark" data-view="team" aria-label="팀 프로젝트 기여도 평가">
+      <a href="#/" class="brand brand-mark" data-view="home" aria-label="팀 프로젝트 기여도 평가 — 홈">
         <span class="brand-glow" aria-hidden="true"></span>
         <span class="brand-title">팀 공정 평가</span>
         <span class="brand-tag">기여도 자동 산출</span>
       </a>
       <nav class="nav" aria-label="주요 메뉴">
-        <button type="button" class="${cur("team")}" data-view="team">평가</button>
-        <button type="button" class="${cur("hub")}" data-view="hub">분석 기능</button>
+        <button type="button" class="${cur("home")}" data-view="home">홈</button>
+        <button type="button" class="${cur("team")}" data-view="team">팀 평가</button>
+        <button type="button" class="${cur("hub")}" data-view="hub">부가 분석</button>
       </nav>
     </div>
   </header>`;
@@ -1602,29 +1604,39 @@ function footerHtml(): string {
   </footer>`;
 }
 
-function hubHtml(): string {
+function homeHtml(): string {
   return `
   <div class="page page-animate home-page">
     <section class="hero-block home-hero-main home-hero-visual">
       <div class="hero-orb hero-orb--a" aria-hidden="true"></div>
       <div class="hero-orb hero-orb--b" aria-hidden="true"></div>
-      <p class="eyebrow eyebrow--shine">문제 정의와 해결</p>
-      <h1 class="home-headline home-headline--fx">팀 프로젝트 기여도는 공정하게 평가하기 어렵다</h1>
-      <p class="hero-text home-lead"><strong>해결:</strong> Git 기반 자동 기여도 평가 시스템</p>
-      <div class="pill-row hero-pills">
-        <span class="pill pill-on">자동 기여도 산출</span>
-        <span class="pill pill-on">이상 탐지</span>
-        <span class="pill pill-on">AI 분석</span>
-        <span class="pill pill-muted">AI 기반 분석 (LLM)</span>
-      </div>
-      <p class="row-actions" style="margin-top:1rem;">
-        <button type="button" class="btn btn-primary" data-view="team">기여도 평가 시작하기</button>
+      <p class="eyebrow eyebrow--shine">교육 보조 · 참고용</p>
+      <h1 class="home-headline home-headline--fx">팀 프로젝트 기여도 자동 평가</h1>
+      <p class="hero-text home-lead">
+        Git·활동 지표를 바탕으로 기여를 정리하고, 무임승차 의심·협업 네트워크 등을 참고용으로 제시합니다.
+        최종 성적·징계 판단을 대체하지 않습니다.
       </p>
-      <p class="muted small home-lead">Git 데이터 + 활동 데이터 기반 자동 분석</p>
+      <div class="pill-row hero-pills">
+        <span class="pill pill-on">기여 지수</span>
+        <span class="pill pill-on">이상·무임승차 탐지</span>
+        <span class="pill pill-on">선택적 LLM 해설</span>
+        <span class="pill pill-muted">과정–시험·이탈 등 부가 분석</span>
+      </div>
+      <p class="row-actions" style="margin-top:1.25rem;">
+        <button type="button" class="btn btn-primary" data-view="team">팀 평가 시작</button>
+        <button type="button" class="btn btn-ghost" data-view="hub">부가 분석 도구</button>
+      </p>
+      <p class="muted small home-lead">OpenAPI 연동 · 로컬 또는 Docker로 실행</p>
     </section>
+  </div>`;
+}
 
+function hubHtml(): string {
+  return `
+  <div class="page page-animate home-page">
     <section class="section-block hud-section home-section">
-      <h2 class="section-title">분석 기능 (평가 보조 분석)</h2>
+      <h2 class="section-title">부가 분석 (평가 보조)</h2>
+      <p class="muted small" style="margin:-0.5rem 0 1rem;">팀 평가와 별도로, 과정·시험 불일치·이탈 신호 등을 점검합니다.</p>
       <div class="analysis-flow">
         <article class="solution-tile solution-tile--live hud-card analysis-step">
           <span class="solution-badge solution-badge--on">1. 과정 vs 시험 불일치</span>
@@ -2188,6 +2200,8 @@ function analyzeHtml(): string {
 
 function mainContentHtml(): string {
   switch (state.view) {
+    case "home":
+      return homeHtml();
     case "hub":
       return hubHtml();
     case "team":
@@ -2201,7 +2215,7 @@ function mainContentHtml(): string {
     case "analyze":
       return analyzeHtml();
     default:
-      return teamHtml();
+      return homeHtml();
   }
 }
 
@@ -2272,6 +2286,10 @@ function setView(v: SiteView): void {
   state.view = v;
   if (v === "team") {
     hydrateTeamDraftIfEmpty();
+  }
+  const nextHash = v === "home" ? "#/" : `#/${v}`;
+  if (location.hash !== nextHash) {
+    history.replaceState(null, "", `${location.pathname}${location.search}${nextHash}`);
   }
   void refreshHealth(true).then(() => {
     renderSync();
@@ -2437,8 +2455,26 @@ function wire(): void {
   });
 }
 
+/** URL 해시로 뷰 복원 (예: #/team, #/hub). 해시 없으면 홈. */
+function applyHashRouteOnce(): void {
+  const h = (location.hash || "").replace(/^#\/?/, "").split(/[/?]/)[0]?.toLowerCase() ?? "";
+  if (!h) return;
+  const map: Record<string, SiteView> = {
+    home: "home",
+    team: "team",
+    hub: "hub",
+    analyze: "analyze",
+    "at-risk": "at-risk",
+    feedback: "feedback",
+    rubric: "rubric",
+  };
+  const v = map[h];
+  if (v) state.view = v;
+}
+
 /** 백엔드 health 전에도 셸을 먼저 그려 빈 화면을 막음 */
 function boot(): void {
+  applyHashRouteOnce();
   renderSync();
   void refreshHealth(true).then(() => renderSync());
 }

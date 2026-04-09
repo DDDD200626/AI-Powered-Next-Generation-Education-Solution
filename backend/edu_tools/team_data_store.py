@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,48 @@ def record_team_report(
         c.commit()
     finally:
         c.close()
+
+
+def member_history_features(member_name: str, days: int = 120) -> tuple[float, float, float]:
+    """과거 평가에서 온 사전(0~1 스케일) — 현재 요청은 아직 DB에 없으므로 누수 없음.
+
+    Returns:
+        (hist_blended_01, hist_rule_01, hist_count_strength)
+    """
+    init_db()
+    name = (member_name or "").strip()
+    if not name:
+        return (0.5, 0.5, 0.0)
+    d = max(1, min(365, int(days)))
+    try:
+        c = _conn()
+        cur = c.cursor()
+        cur.execute(
+            """
+            SELECT
+              AVG(blended_score) AS b,
+              AVG(rule_score) AS r,
+              COUNT(*) AS n
+            FROM contribution_events
+            WHERE member_name = ?
+              AND datetime(created_at) >= datetime('now', ?)
+              AND blended_score IS NOT NULL
+            """,
+            (name, f"-{d} day"),
+        )
+        row = cur.fetchone()
+        c.close()
+        if not row or int(row["n"] or 0) < 1:
+            return (0.5, 0.5, 0.0)
+        b = float(row["b"] or 50.0)
+        r = float(row["r"] or 50.0)
+        cnt = int(row["n"] or 0)
+        hb = max(0.0, min(1.0, b / 100.0))
+        hr = max(0.0, min(1.0, r / 100.0))
+        hd = min(1.0, math.log1p(cnt) / 6.0)
+        return (hb, hr, hd)
+    except Exception:
+        return (0.5, 0.5, 0.0)
 
 
 def db_profile() -> dict[str, int]:

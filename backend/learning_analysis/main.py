@@ -32,6 +32,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
+from edu_tools.contest_judge_pack import contest_submission_pack
+from edu_tools.dl_roadmap import roadmap_payload
 from edu_tools.at_risk import router as at_risk_router
 from edu_tools.course_qa import router as course_qa_router
 from edu_tools.discussion import router as discussion_router
@@ -39,6 +41,8 @@ from edu_tools.feedback import router as feedback_router
 from edu_tools.rubric_align import router as rubric_align_router
 from edu_tools.team import router as team_router
 from edu_tools.team_data_store import contribution_trends, db_profile, model_monitor
+from edu_tools.team_ml_model import dataset_label_streaming_stats
+from edu_tools.team_model_report import build_limits_report
 from edu_tools.team_unified_eval import router as team_unified_router
 from learning_analysis.compare_freeform import compare_llm_async
 from learning_analysis.pipeline import analyze_async, provider_keys_status
@@ -140,8 +144,19 @@ def _capabilities_payload() -> dict[str, Any]:
                     "프론트 가상 시뮬레이터 (main.ts)",
                 ],
             },
+            "deep_learning_assist": {
+                "label_ko": "딥러닝 기여도 보강(투명성)",
+                "summary": "PyTorch 앙상블·불확실도·피처·블렌드·한계를 응답에 구조화",
+                "evidence": [
+                    "POST /api/team/report → dl_model_info.contest_transparency",
+                    "edu_tools/team_unified_eval.py — _contest_transparency_pack",
+                    "edu_tools/team_torch_model.py — 학습·추론",
+                ],
+            },
         },
         "ai_providers_configured": provider_keys_status(),
+        "dl_roadmap": roadmap_payload(),
+        "contest_submission_pack": contest_submission_pack(),
         "endpoints": {
             "capabilities": "GET /api/capabilities",
             "health": "GET /api/health",
@@ -157,6 +172,9 @@ def _capabilities_payload() -> dict[str, Any]:
             "llm_compare": "POST /api/llm/compare",
             "perf_recent": "GET /api/perf/recent",
             "rubric_draft": "POST /api/rubric/draft",
+            "team_model_limits_report": "GET /api/team/model/limits-report",
+            "team_dataset_label_summary": "GET /api/team/data/dataset-label-summary",
+            "team_benchmark_narrow": "POST /api/team/benchmark-narrow",
         },
     }
 
@@ -255,11 +273,25 @@ async def api_team_data_trends(response: Response, days: int = 30, member_name: 
     }
 
 
+@app.get("/api/team/data/dataset-label-summary")
+async def api_team_dataset_label_summary(response: Response):
+    """team_ml_dataset.jsonl 라벨(y) 분포 요약 — 수집·스케일 점검."""
+    response.headers["Cache-Control"] = "private, max-age=15"
+    return {"status": "ok", "stats": dataset_label_streaming_stats()}
+
+
 @app.get("/api/team/model/monitor")
 async def api_team_model_monitor(response: Response, days: int = 30):
     """DL 보조 모델 운영 모니터링 요약."""
     response.headers["Cache-Control"] = "private, max-age=5"
     return {"status": "ok", "monitor": model_monitor(window_days=days)}
+
+
+@app.get("/api/team/model/limits-report")
+async def api_team_model_limits_report(response: Response, days: int = 30):
+    """한계 1(정보·라벨)·한계 2(측정 품질) 요약 — 심사·운영 증빙용."""
+    response.headers["Cache-Control"] = "private, max-age=10"
+    return {"status": "ok", "report": build_limits_report(window_days=days)}
 
 
 @app.get("/api/observability")

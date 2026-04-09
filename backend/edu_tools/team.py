@@ -190,6 +190,28 @@ class MemberOut(BaseModel):
         description="dev, doc, leader, supporter 합산 100 근사",
     )
     freerider_detection: FreeriderDetectionReport = Field(default_factory=FreeriderDetectionReport)
+    dl_score: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="데이터 학습 보조 점수(PyTorch MLP 또는 경량 선형). 참고용.",
+    )
+    dl_confidence: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="DL 신뢰도(불확실도·입력 분산 반영).",
+    )
+    dl_blended_score: float | None = Field(
+        None,
+        ge=0,
+        le=100,
+        description="통합 엔진: 룰 정규화 점수와 DL의 고정 비율 블렌드(0.7/0.3).",
+    )
+    dl_top_factors: list[str] = Field(
+        default_factory=list,
+        description="DL 보조 점수에 영향 큰 요인(통합 피처 기준)",
+    )
 
 
 class MemberExplainFact(BaseModel):
@@ -468,6 +490,60 @@ class TeamEvaluateResponse(BaseModel):
         default_factory=ImprovementChainBlock,
         description="문제→설명→개선→기대효과",
     )
+    dl_model_info: dict[str, Any] = Field(
+        default_factory=dict,
+        description="팀 통합 평가 엔진과 동일한 데이터 학습·PyTorch 메타(없으면 빈 객체)",
+    )
+
+
+def _attach_dl_to_members(
+    req: TeamEvaluateRequest,
+    members: list[MemberOut],
+    request_id: str,
+) -> tuple[list[MemberOut], dict[str, Any]]:
+    """통합 리포트(`team_unified_eval`)와 동일 파이프라인으로 DL 보조 점수를 붙인다."""
+    try:
+        from edu_tools.team_unified_eval import TeamUserIn, apply_dl_scores, run_score_engine
+    except Exception:
+        return members, {}
+
+    rid = (request_id or "").strip() or str(uuid.uuid4())
+    try:
+        users: list[TeamUserIn] = []
+        for m in req.members:
+            meet = float(m.meetings_attended or 0)
+            users.append(
+                TeamUserIn(
+                    name=m.name.strip(),
+                    commits=int(m.commits or 0),
+                    prs=int(m.pull_requests or 0),
+                    lines=int(m.lines_changed or 0),
+                    attendance=min(100.0, max(0.0, meet * 12.5)),
+                    selfReport=m.self_report or "",
+                )
+            )
+        scores, _trust = run_score_engine(users)
+        dl_info = apply_dl_scores(users, scores, request_id=rid, learning=True)
+        by_name = {s.member_name.strip(): s for s in scores}
+        out: list[MemberOut] = []
+        for mem in members:
+            s = by_name.get(mem.name.strip())
+            if s is None:
+                out.append(mem)
+                continue
+            out.append(
+                mem.model_copy(
+                    update={
+                        "dl_score": s.dl_score,
+                        "dl_confidence": s.dl_confidence,
+                        "dl_blended_score": s.blendedScore,
+                        "dl_top_factors": list(s.dl_top_factors or []),
+                    }
+                )
+            )
+        return out, dl_info
+    except Exception:
+        return members, {}
 
 
 def _parse_json(text: str) -> dict[str, Any]:
@@ -921,6 +997,7 @@ def _finalize_members(
     fairness_notes: str = "",
     *,
     enrich_openai: bool = True,
+    request_id: str = "",
 ) -> TeamEvaluateResponse:
     timelines = _merge_timelines(req, contribution_indices)
     suspected, risks, sigs = _free_rider_analysis(req, contribution_indices, timelines)
@@ -995,6 +1072,8 @@ def _finalize_members(
             for i in range(len(out_members))
         ]
 
+    out_members, dl_model_info = _attach_dl_to_members(req, out_members, request_id)
+
     team_dashboard = build_team_dashboard(out_members)
     rubric_rep, trust_blk, risk_blk, improve_blk = build_contest_layers(req, out_members, net)
 
@@ -1020,10 +1099,11 @@ def _finalize_members(
         evaluation_trust=trust_blk,
         team_risk=risk_blk,
         improvement_chain=improve_blk,
+        dl_model_info=dl_model_info,
     )
 
 
-def _heuristic(req: TeamEvaluateRequest) -> TeamEvaluateResponse:
+def _heuristic(req: TeamEvaluateRequest, request_id: str = "") -> TeamEvaluateResponse:
     members = req.members
     n = len(members)
 
@@ -1077,10 +1157,10 @@ def _heuristic(req: TeamEvaluateRequest) -> TeamEvaluateResponse:
     if n > 1 and commits and max(commits) > 0 and max(commits) / (sum(commits) / n) > 2.5:
         note += " 커밋 편차가 큽니다. 리뷰·기획 기여를 확인하세요."
 
-    return _finalize_members(req, out, contribution_indices, "heuristic", note)
+    return _finalize_members(req, out, contribution_indices, "heuristic", note, request_id=request_id)
 
 
-def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse:
+def _openai_eval(req: TeamEvaluateRequest, api_key: str, request_id: str = "") -> TeamEvaluateResponse:
     payload = {
         "project_name": req.project_name,
         "project_description": req.project_description,
@@ -1122,7 +1202,7 @@ def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse
         if raw is None and len(data.get("members") or []) == len(req.members):
             raw = (data.get("members") or [])[len(out)]
         if not isinstance(raw, dict):
-            return _heuristic(req)
+            return _heuristic(req, request_id)
         d = raw.get("dimensions") or {}
         ci = max(0, min(100, float(raw.get("contribution_index", 50))))
         contribution_indices.append(ci)
@@ -1141,10 +1221,10 @@ def _openai_eval(req: TeamEvaluateRequest, api_key: str) -> TeamEvaluateResponse
             )
         )
     if len(out) != len(req.members):
-        return _heuristic(req)
+        return _heuristic(req, request_id)
 
     fn = str(data.get("fairness_notes", ""))[:2000]
-    return _finalize_members(req, out, contribution_indices, "ai", fn)
+    return _finalize_members(req, out, contribution_indices, "ai", fn, request_id=request_id)
 
 
 def _stamp_team_response(resp: TeamEvaluateResponse, request_id: str, t0: float) -> TeamEvaluateResponse:
@@ -1193,7 +1273,7 @@ async def evaluate_team(body: TeamEvaluateRequest) -> TeamEvaluateResponse:
         try:
             from edu_tools.team_multi_llm import run_parallel_team_eval
 
-            merged = run_parallel_team_eval(body)
+            merged = run_parallel_team_eval(body, request_id=request_id)
             if merged is not None:
                 return _stamp_team_response(merged, request_id, t0)
         except Exception:
@@ -1201,8 +1281,8 @@ async def evaluate_team(body: TeamEvaluateRequest) -> TeamEvaluateResponse:
         key = (os.environ.get("OPENAI_API_KEY") or "").strip()
         if key:
             try:
-                return _stamp_team_response(_openai_eval(body, key), request_id, t0)
+                return _stamp_team_response(_openai_eval(body, key, request_id), request_id, t0)
             except Exception:
-                return _stamp_team_response(_heuristic(body), request_id, t0)
-        return _stamp_team_response(_heuristic(body), request_id, t0)
-    return _stamp_team_response(_heuristic(body), request_id, t0)
+                return _stamp_team_response(_heuristic(body, request_id), request_id, t0)
+        return _stamp_team_response(_heuristic(body, request_id), request_id, t0)
+    return _stamp_team_response(_heuristic(body, request_id), request_id, t0)

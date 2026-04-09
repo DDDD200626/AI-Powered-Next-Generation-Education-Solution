@@ -234,7 +234,9 @@ def _call_grok(req: TeamEvaluateRequest, api_key: str) -> dict[str, Any] | None:
     return _parse_json(text)
 
 
-def run_parallel_team_eval(req: TeamEvaluateRequest) -> TeamEvaluateResponse | None:
+def run_parallel_team_eval(
+    req: TeamEvaluateRequest, *, request_id: str = ""
+) -> TeamEvaluateResponse | None:
     """
     설정된 API 키가 있는 제공자만 병렬 호출하고, 성공한 응답들을 팀원별로 평균 병합합니다.
     성공한 모델이 하나도 없으면 None.
@@ -285,13 +287,13 @@ def run_parallel_team_eval(req: TeamEvaluateRequest) -> TeamEvaluateResponse | N
     if len(parsed) == 1:
         prov, members, cis, fn = parsed[0]
         merged_fn = f"[단일 LLM: {prov}] {fn}"
-        return _finalize_members(req, members, cis, "ai", merged_fn)
+        return _finalize_members(req, members, cis, "ai", merged_fn, request_id=request_id)
 
     try:
         out, cis, merged_fn = _merge_parsed(req, parsed)
     except ValueError:
         return None
-    return _finalize_members(req, out, cis, "ai", merged_fn)
+    return _finalize_members(req, out, cis, "ai", merged_fn, request_id=request_id)
 
 
 def _run_one_model(
