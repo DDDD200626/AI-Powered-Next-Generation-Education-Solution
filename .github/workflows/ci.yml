@@ -8,7 +8,8 @@ on:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    # ubuntu-latest(24.04)에서 시스템 파이썬/PEP668 이슈를 피하고, 러너 업데이트 시에도 휠 호환을 맞추기 쉽게 22.04 고정
+    runs-on: ubuntu-22.04
     defaults:
       run:
         shell: bash
@@ -27,9 +28,12 @@ jobs:
           python -m venv .venv
           PY=.venv/bin/python
           "$PY" -m pip install --upgrade pip setuptools wheel
-          "$PY" -m pip install --retries 5 --timeout 120 \
+          # torch 줄을 제외한 requirements 먼저(PyPI), 마지막에 torch만 PyTorch CPU 인덱스에서 설치(해석 충돌 방지)
+          grep -v '^[[:space:]]*#' requirements.txt | grep -v '^[[:space:]]*$' | grep -vi '^[[:space:]]*torch' > /tmp/req-no-torch.txt
+          "$PY" -m pip install --retries 5 --timeout 180 -r /tmp/req-no-torch.txt
+          "$PY" -m pip install --retries 5 --timeout 180 \
             --extra-index-url https://download.pytorch.org/whl/cpu \
-            -r requirements.txt
+            "torch>=2.5.1"
       - name: Pytest
         run: .venv/bin/python -m pytest tests/ -q --tb=short
       - name: Import app
