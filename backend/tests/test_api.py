@@ -110,6 +110,22 @@ def test_dataset_label_summary_ok() -> None:
     assert "lines_scanned" in (body.get("stats") or {})
 
 
+def test_dataset_label_summary_schema_is_stable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """내부 stats 계산기가 일부 키를 누락해도 API 응답 스키마는 유지되어야 한다."""
+    monkeypatch.setattr(
+        "learning_analysis.main.dataset_label_streaming_stats",
+        lambda: {"error": "forced_missing_keys"},
+    )
+    r = client.get("/api/team/data/dataset-label-summary")
+    assert r.status_code == 200
+    body = r.json()
+    stats = body.get("stats") or {}
+    assert body.get("status") == "ok"
+    assert "lines_scanned" in stats
+    assert "y_present" in stats
+    assert "dataset_path" in stats
+
+
 def test_rubric_draft_heuristic_returns_criteria() -> None:
     r = client.post(
         "/api/rubric/draft",

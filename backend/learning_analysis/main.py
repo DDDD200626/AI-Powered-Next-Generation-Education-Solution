@@ -277,7 +277,13 @@ async def api_team_data_trends(response: Response, days: int = 30, member_name: 
 async def api_team_dataset_label_summary(response: Response):
     """team_ml_dataset.jsonl 라벨(y) 분포 요약 — 수집·스케일 점검."""
     response.headers["Cache-Control"] = "private, max-age=15"
-    return {"status": "ok", "stats": dataset_label_streaming_stats()}
+    # CI/로컬 환경 차이(데이터 파일 부재 등)에서도 응답 스키마를 고정한다.
+    raw = dataset_label_streaming_stats()
+    stats = dict(raw) if isinstance(raw, dict) else {}
+    stats.setdefault("lines_scanned", 0)
+    stats.setdefault("y_present", 0)
+    stats.setdefault("dataset_path", "")
+    return {"status": "ok", "stats": stats}
 
 
 @app.get("/api/team/model/monitor")
