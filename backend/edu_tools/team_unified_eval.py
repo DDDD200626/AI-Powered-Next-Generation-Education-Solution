@@ -23,6 +23,7 @@ from edu_tools.team_ml_model import (
     FEATURE_LABELS,
     FEATURE_VERSION,
     LABEL_SPEC_VERSION,
+    MIN_TRAIN_SAMPLES,
     STRUCTURAL_TARGET_WEIGHT,
     append_samples,
     build_feature_vector,
@@ -281,6 +282,81 @@ def _estimate_feature_drift(xs: list[list[float]], meta: dict[str, Any]) -> dict
         "drift_score_0_100": round(score, 2),
         "drift_level": level,
         "mean_abs_z_shift": round(mean_z, 4),
+    }
+
+
+def _operations_playbook(
+    *,
+    use_torch: bool,
+    meta: dict[str, Any],
+    drift_info: dict[str, Any],
+    torch_info: dict[str, Any],
+    sample_count: int,
+) -> dict[str, Any]:
+    """설명(dl_quality_unified)과 별도로, 현재 요청 기준 운영 권고(교육자·운영자용)."""
+    checklist: list[str] = []
+    pg_raw = meta.get("promotion_gate") if use_torch else None
+    pg = pg_raw if isinstance(pg_raw, dict) else {}
+    accepted = pg.get("accepted")
+    drift_level = str(drift_info.get("drift_level") or "")
+    ds = drift_info.get("drift_score_0_100")
+    ds_f = float(ds) if isinstance(ds, (int, float)) else None
+
+    level = "ok"
+    summary = (
+        "배치 피처 분포와 학습 메타가 대체로 일치하며, 별도 조치 없이 참고·모니터링 수준입니다."
+        if use_torch
+        else "경량 모드(선형/폴백)로 동작 중입니다. PyTorch 보강을 쓰려면 표본·환경을 확인하세요."
+    )
+
+    if use_torch and accepted is False:
+        level = "action"
+        summary = (
+            "최근 후보 모델이 승격 게이트에서 거절되었습니다. 홀드아웃·검증 MAE와 데이터 라벨을 점검한 뒤 재학습하세요."
+        )
+        checklist.append("로그의 promotion_gate 사유(validation_mae_regressed 등) 확인")
+        checklist.append("TEAM_HOLDOUT_TIME_FRAC·TEAM_TRAIN_OUTLIER_IQR_K 조정 검토")
+    elif use_torch and (drift_level == "high" or (ds_f is not None and ds_f < 40.0)):
+        level = "action" if (ds_f is not None and ds_f < 30.0) else "watch"
+        summary = "현재 팀 입력이 학습 시점 대비 크게 어긋난 것으로 보입니다. 누적 데이터·피처 정의를 점검하세요."
+        checklist.append("dataset JSONL 누적·세션(sess) 중복 여부 확인")
+        checklist.append("TEAM_TORCH_RETRAIN_DRIFT_MIN으로 재학습 트리거 검토")
+    elif sample_count < MIN_TRAIN_SAMPLES + 10:
+        if level == "ok":
+            level = "watch"
+        summary = (
+            f"학습 표본이 아직 적습니다(참고: 최소 학습 기준 {MIN_TRAIN_SAMPLES}행 근처). "
+            "평가 요청을 반복해 누적하면 DL 보정이 안정화됩니다."
+        )
+        checklist.append("동일 과제에서 팀 리포트/평가를 여러 번 실행해 샘플 확보")
+
+    if use_torch and torch_info.get("trained"):
+        checklist.append("이번 요청에서 재학습 실행됨 — validation·holdout 메타 확인")
+
+    noise = meta.get("input_noise_std_training")
+    if use_torch and isinstance(noise, (int, float)) and float(noise) > 0:
+        checklist.append(f"학습 시 입력 노이즈 σ={float(noise):g} 적용 중(일반화)")
+
+    ex = (meta.get("dl_quality_unified") or {}).get("explainability") if use_torch else None
+    if isinstance(ex, dict) and ex.get("permutation_importance_top"):
+        checklist.append("치환 중요도 상위 피처는 품질 메타·아래 설명 패널 참고")
+
+    return {
+        "recommendation_level": level,
+        "summary_ko": summary,
+        "checklist_ko": checklist[:10],
+        "indicators": {
+            "drift": drift_info,
+            "promotion_gate": pg if use_torch else None,
+            "sample_count": sample_count,
+            "pytorch_active": use_torch,
+            "last_train_in_request": {
+                "trained": bool(torch_info.get("trained")),
+                "reason": torch_info.get("reason"),
+            }
+            if use_torch
+            else None,
+        },
     }
 
 
@@ -604,6 +680,19 @@ def apply_dl_scores(
         "drift_level": "n/a",
         "mean_abs_z_shift": None,
     }
+    sc_for_ops = int(meta.get("sample_count") or 0) if use_torch else int((model.sample_count if model else 0) or 0)
+    ex_snap = None
+    if use_torch:
+        dq = meta.get("dl_quality_unified")
+        if isinstance(dq, dict):
+            ex_snap = dq.get("explainability")
+    ops_pb = _operations_playbook(
+        use_torch=use_torch,
+        meta=meta,
+        drift_info=drift_info,
+        torch_info=torch_info,
+        sample_count=sc_for_ops,
+    )
     return {
         "model_name": "team-torch-mlp" if use_torch else "team-ml-linear-sgd",
         "enabled": True,
@@ -643,6 +732,8 @@ def apply_dl_scores(
             "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
             "promotion_gate": meta.get("promotion_gate") if use_torch else None,
             "feature_drift": drift_info,
+            "explainability_snapshot": ex_snap,
+            "operations_playbook": ops_pb,
         },
         "web_priors": priors_meta,
         "input_features": FEATURE_LABELS,
@@ -674,6 +765,8 @@ def apply_dl_scores(
                 "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
                 "promotion_gate": meta.get("promotion_gate") if use_torch else None,
                 "feature_drift": drift_info,
+                "explainability_snapshot": ex_snap,
+                "operations_playbook": ops_pb,
             },
             target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
         ),

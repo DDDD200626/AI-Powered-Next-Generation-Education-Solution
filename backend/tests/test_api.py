@@ -310,3 +310,7 @@ def test_team_report_unified_pipeline() -> None:
     fd = q.get("feature_drift") or {}
     assert "drift_level" in fd
     assert "promotion_gate" in q
+    assert "operations_playbook" in q
+    op = q.get("operations_playbook") or {}
+    assert op.get("recommendation_level") in ("ok", "watch", "action")
+    assert isinstance(op.get("checklist_ko"), list)

@@ -1311,6 +1311,66 @@ function promotionGateHtml(rep: TeamUnifiedReport): string {
   </section>`;
 }
 
+function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
+  const dl = rep.dl_model_info as
+    | {
+        quality?: {
+          operations_playbook?: {
+            recommendation_level?: string;
+            summary_ko?: string;
+            checklist_ko?: string[];
+          };
+          explainability_snapshot?: {
+            permutation_importance_top?: { feature?: string; delta_mae?: number }[];
+            input_noise_std_training?: number;
+            note_ko?: string;
+          };
+        };
+      }
+    | undefined;
+  const pb = dl?.quality?.operations_playbook;
+  const ex = dl?.quality?.explainability_snapshot;
+  if (!pb && !ex) return "";
+  const lvl = (pb?.recommendation_level || "ok").toLowerCase();
+  const pill =
+    lvl === "action" ? "pill-warn" : lvl === "watch" ? "pill-muted" : "pill-on";
+  const label = lvl === "action" ? "조치 권고" : lvl === "watch" ? "주의" : "양호";
+  const summary = pb?.summary_ko ? `<p class="muted small">${escapeHtml(pb.summary_ko)}</p>` : "";
+  const checklist = (pb?.checklist_ko || []).filter((x) => typeof x === "string");
+  const listHtml = checklist.length
+    ? `<ul class="report-flags">${checklist.map((c) => `<li>${escapeHtml(c)}</li>`).join("")}</ul>`
+    : "";
+  const perm = ex?.permutation_importance_top || [];
+  const permHtml =
+    perm.length > 0
+      ? `<p class="muted small"><strong>치환 중요도(상위)</strong></p><ul class="report-flags">${perm
+          .slice(0, 5)
+          .map(
+            (p) =>
+              `<li>${escapeHtml(String(p.feature ?? "?"))} · ΔMAE ${typeof p.delta_mae === "number" ? p.delta_mae.toFixed(4) : "?"}</li>`,
+          )
+          .join("")}</ul>`
+      : "";
+  const noise =
+    typeof ex?.input_noise_std_training === "number" && ex.input_noise_std_training > 0
+      ? `<p class="muted small">학습 입력 노이즈 σ=${ex.input_noise_std_training}</p>`
+      : "";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">DL 설명 · 운영 권고</h3>
+    ${
+      pb
+        ? `<p><span class="pill ${pill}">${escapeHtml(label)}</span> <span class="muted small">recommendation_level=${escapeHtml(lvl)}</span></p>
+    ${summary}
+    ${listHtml}`
+        : ""
+    }
+    ${noise}
+    ${permHtml}
+    ${ex?.note_ko ? `<p class="muted small">${escapeHtml(ex.note_ko)}</p>` : ""}
+  </section>`;
+}
+
 function promotionGateBannerHtml(rep: TeamUnifiedReport): string {
   const info = (rep.dl_model_info as { quality?: { promotion_gate?: PromotionGateInfo } } | undefined)
     ?.quality?.promotion_gate;
@@ -1841,6 +1901,7 @@ function teamReportHtml(): string {
     }
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
     ${promotionGateBannerHtml(rep)}
+    ${dlExplainOpsPanelHtml(rep)}
     ${confidenceGateHtml(rep)}
     ${promotionGateHtml(rep)}
     ${edgeCases}
