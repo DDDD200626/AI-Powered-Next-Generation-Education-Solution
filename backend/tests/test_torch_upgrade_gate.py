@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from edu_tools.dl_roadmap import build_dl_quality_unified
 from edu_tools.team_torch_model import _promotion_gate_decision
 
 
@@ -17,3 +18,17 @@ def test_promotion_gate_rejects_when_candidate_regresses() -> None:
     ok, reasons = _promotion_gate_decision(prev, cand)
     assert ok is False
     assert "validation_mae_regressed" in reasons or "holdout_mae_regressed" in reasons
+
+
+def test_dl_quality_unified_v4_includes_explainability() -> None:
+    meta = {
+        "permutation_importance_top": [{"feature": "log_commits", "delta_mae": 0.02}],
+        "input_noise_std_training": 0.015,
+        "dl_roadmap_version": 5,
+    }
+    u = build_dl_quality_unified(meta)
+    assert u["schema"] == "dl_quality_unified_v4"
+    ex = u.get("explainability") or {}
+    assert ex.get("permutation_importance_top") is not None
+    assert ex.get("input_noise_std_training") == 0.015
+    assert "note_ko" in ex

@@ -628,6 +628,62 @@ def _promotion_gate_decision(
     return allow, reasons
 
 
+def _resolve_input_noise_std_training() -> float:
+    """학습 순전파에만 더하는 가우시안 노이즈 표준편차(0이면 비활성)."""
+    try:
+        v = float((os.environ.get("TEAM_TORCH_INPUT_NOISE_STD", "0") or "0").strip())
+    except Exception:
+        v = 0.0
+    return max(0.0, min(0.5, v))
+
+
+def _permutation_importance_top_k(
+    nn_module: Any,
+    state_dict: dict[str, Any],
+    best_h: dict[str, Any],
+    in_dim: int,
+    xz_all: Any,
+    y_all: Any,
+    va_idx: list[int],
+    labels: list[str],
+    seed: int,
+) -> list[dict[str, Any]] | None:
+    """검증 구간에서 피처 열 치환 시 MAE 증가(대략적 중요도). 앙상블 1번째 멤버로 측정."""
+    import torch
+
+    if len(va_idx) < 4 or not state_dict:
+        return None
+    # 큰 검증 집합은 균등 간격으로 줄여 CPU 비용 상한
+    if len(va_idx) > 400:
+        step = max(1, len(va_idx) // 400)
+        va_idx = va_idx[::step][:400]
+    xz_va = xz_all[va_idx]
+    y_va = y_all[va_idx]
+    model = _build_model(nn_module, best_h, in_dim)
+    model.load_state_dict(state_dict)
+    model.eval()
+    g = torch.Generator()
+    g.manual_seed(int(seed) & 0x7FFFFFFF)
+    with torch.no_grad():
+        baseline = float(torch.mean(torch.abs(model(xz_va) - y_va)).item())
+    rows: list[dict[str, Any]] = []
+    for d in range(in_dim):
+        xz_p = xz_va.clone()
+        perm = torch.randperm(xz_p.size(0), device=xz_p.device, generator=g)
+        xz_p[:, d] = xz_p[perm, d]
+        with torch.no_grad():
+            mae_p = float(torch.mean(torch.abs(model(xz_p) - y_va)).item())
+        lab = labels[d] if d < len(labels) else f"dim_{d}"
+        rows.append(
+            {
+                "feature": lab,
+                "delta_mae": round(mae_p - baseline, 6),
+            }
+        )
+    rows.sort(key=lambda r: -abs(float(r["delta_mae"])))
+    return rows[:10]
+
+
 def train_torch_if_needed() -> dict[str, Any]:
     if not torch_available():
         return {"enabled": False, "reason": "torch_unavailable"}
@@ -688,6 +744,8 @@ def train_torch_if_needed() -> dict[str, Any]:
     torch.manual_seed(run_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(run_seed)
+
+    input_noise_std = _resolve_input_noise_std_training()
 
     x_all = torch.tensor(
         [pad_feature_vector([float(v) for v in r["x"]]) for r in data_eff], dtype=torch.float32
@@ -804,7 +862,10 @@ def train_torch_if_needed() -> dict[str, Any]:
         model.train()
         for _ in range(int(best_h["epochs"])):
             opt.zero_grad()
-            pred = model(x_tr)
+            x_in = x_tr
+            if input_noise_std > 0:
+                x_in = x_tr + torch.randn_like(x_tr) * input_noise_std
+            pred = model(x_in)
             loss = loss_fn(pred, y_tr)
             # 세션(동일 요청) 내 순위 보조 손실 — 룰 순위와 독립적인 학습 신호
             gp: dict[str, list[int]] = defaultdict(list)
@@ -880,6 +941,20 @@ def train_torch_if_needed() -> dict[str, Any]:
         calib_preds.extend([float(v) for v in p_va.view(-1).tolist()])
         calib_targets.extend([float(v) for v in y_va.view(-1).tolist()])
         ensemble_states.append(model.state_dict())
+
+    split_perm = max(1, int(n * 0.86))
+    va_idx_perm = idx[split_perm:] if split_perm < n else idx[-1:]
+    perm_top = _permutation_importance_top_k(
+        nn,
+        ensemble_states[0],
+        best_h,
+        in_dim,
+        xz_all,
+        y_all,
+        va_idx_perm,
+        FEATURE_LABELS,
+        run_seed + 4242,
+    )
 
     tail_k = max(3, min(max(1, int(n * 0.12)), n - 1))
     x_tail = xz_all[-tail_k:]
@@ -1033,6 +1108,8 @@ def train_torch_if_needed() -> dict[str, Any]:
         "holdout_time_pearson_r": holdout_time_pearson_r,
         "holdout_time_r2": holdout_time_r2,
         "holdout_time_note_ko": holdout_time_note_ko,
+        "input_noise_std_training": round(float(input_noise_std), 6),
+        "permutation_importance_top": perm_top,
     }
     out_meta["dl_quality_unified"] = build_dl_quality_unified(out_meta)
     promote_ok, promote_reasons = _promotion_gate_decision(meta, out_meta)

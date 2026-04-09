@@ -26,7 +26,7 @@ PHASES_KO: tuple[str, ...] = (
 def build_dl_quality_unified(meta: Mapping[str, Any]) -> dict[str, Any]:
     """학습 메타에서 추적용 품질 지표를 한 객체로 묶는다."""
     return {
-        "schema": "dl_quality_unified_v3",
+        "schema": "dl_quality_unified_v4",
         "cv": {
             "split_strategy": meta.get("cv_split_strategy"),
             "unique_groups": meta.get("cv_unique_groups"),
@@ -62,6 +62,14 @@ def build_dl_quality_unified(meta: Mapping[str, Any]) -> dict[str, Any]:
             "outlier_filter": meta.get("training_outlier_stats"),
             "effective_training_rows": meta.get("effective_training_rows"),
             "label_spec_version": meta.get("label_spec_version"),
+        },
+        "explainability": {
+            "permutation_importance_top": meta.get("permutation_importance_top"),
+            "input_noise_std_training": meta.get("input_noise_std_training"),
+            "note_ko": (
+                "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. "
+                "입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+            ),
         },
         "dl_roadmap_version": meta.get("dl_roadmap_version"),
     }
