@@ -11,22 +11,29 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
+        shell: bash
         working-directory: backend
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
+        env:
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -r requirements.txt
+          set -euo pipefail
+          python -m venv .venv
+          PY=.venv/bin/python
+          "$PY" -m pip install --upgrade pip setuptools wheel
+          "$PY" -m pip install --retries 5 --timeout 120 \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r requirements.txt
       - name: Pytest
-        run: python -m pytest tests/ -q
+        run: .venv/bin/python -m pytest tests/ -q --tb=short
       - name: Import app
-        run: python -c "from learning_analysis.main import app; assert app.title"
+        run: .venv/bin/python -c "from learning_analysis.main import app; assert app.title"
 
   frontend:
     runs-on: ubuntu-latest
