@@ -305,3 +305,7 @@ def test_team_report_unified_pipeline() -> None:
     assert ct.get("blend_formula")
     assert "limitations_ko" in ct and isinstance(ct["limitations_ko"], list)
     assert ct.get("rubric_alignment_ko")
+    q = dl.get("quality") or {}
+    assert "feature_drift" in q
+    fd = q.get("feature_drift") or {}
+    assert "drift_level" in fd

@@ -242,6 +242,48 @@ def _scaled_by_team(value: float, base: float, cap_mult: float = 2.5) -> float:
     return min(100.0, 100.0 * min(cap_mult, value / m) / cap_mult)
 
 
+def _blend_weights_from_confidence(dl_confidence: float | None, dl_uncertainty: float | None) -> tuple[float, float]:
+    """DL 신뢰도/불확실도 기반 동적 블렌딩 가중치."""
+    c = float(dl_confidence or 0.0)
+    u = float(dl_uncertainty or 0.0)
+    conf_term = max(0.0, min(1.0, c / 100.0))
+    unc_term = max(0.0, min(1.0, 1.0 - (u / 100.0)))
+    dl_w = 0.22 + 0.26 * ((0.65 * conf_term) + (0.35 * unc_term))
+    dl_w = max(0.22, min(0.48, dl_w))
+    return 1.0 - dl_w, dl_w
+
+
+def _estimate_feature_drift(xs: list[list[float]], meta: dict[str, Any]) -> dict[str, Any]:
+    """학습 시점 피처 통계 대비 현재 배치 드리프트를 0~100 점수로 반환."""
+    if not xs:
+        return {"drift_score_0_100": 0.0, "drift_level": "unknown", "drift_note": "no_batch"}
+    tr_means = meta.get("training_feature_means")
+    tr_stds = meta.get("training_feature_stds")
+    if not isinstance(tr_means, list) or not isinstance(tr_stds, list):
+        return {"drift_score_0_100": 0.0, "drift_level": "unknown", "drift_note": "no_training_stats"}
+    d = min(len(xs[0]), len(tr_means), len(tr_stds))
+    if d <= 0:
+        return {"drift_score_0_100": 0.0, "drift_level": "unknown", "drift_note": "invalid_dimension"}
+    b_means = [sum(r[i] for r in xs) / max(len(xs), 1) for i in range(d)]
+    z_shifts: list[float] = []
+    for i in range(d):
+        s = max(1e-6, float(tr_stds[i]))
+        z_shifts.append(abs((float(b_means[i]) - float(tr_means[i])) / s))
+    mean_z = sum(z_shifts) / max(len(z_shifts), 1)
+    score = max(0.0, min(100.0, 100.0 - min(100.0, mean_z * 22.0)))
+    if score >= 80:
+        level = "low"
+    elif score >= 55:
+        level = "moderate"
+    else:
+        level = "high"
+    return {
+        "drift_score_0_100": round(score, 2),
+        "drift_level": level,
+        "mean_abs_z_shift": round(mean_z, 4),
+    }
+
+
 def run_score_engine(users: list[TeamUserIn]) -> tuple[list[ScoreResult], dict[str, float]]:
     w = _load_weights()
     commits = [float(u.commits) for u in users]
@@ -349,7 +391,7 @@ def apply_dl_scores(
             "contest_transparency": _contest_transparency_pack(
                 enabled=False,
                 backend="none",
-                blend_formula="0.7*normalizedScore + 0.3*dl_score",
+                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
                 sample_count=None,
                 use_torch=False,
                 quality={},
@@ -434,12 +476,12 @@ def apply_dl_scores(
             "enabled": False,
             "reason": "model_not_ready",
             "sample_count": sc,
-            "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+            "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
             "dl_roadmap": roadmap_payload(),
             "contest_transparency": _contest_transparency_pack(
                 enabled=False,
                 backend="none",
-                blend_formula="0.7*normalizedScore + 0.3*dl_score",
+                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
                 sample_count=sc,
                 use_torch=False,
                 quality={"note_ko": "학습 표본 부족 등으로 모델 미가동"},
@@ -553,9 +595,15 @@ def apply_dl_scores(
             conf = max(0.0, min(100.0, conf - min(20.0, dl_uncertainty * 3.0)))
         s.dl_score = round(dl_score, 2)
         s.dl_confidence = round(conf, 1)
-        s.blendedScore = round(0.7 * s.normalizedScore + 0.3 * s.dl_score, 2)
+        rule_w, dl_w = _blend_weights_from_confidence(s.dl_confidence, dl_uncertainty)
+        s.blendedScore = round(rule_w * s.normalizedScore + dl_w * s.dl_score, 2)
 
     meta = torch_model_meta() if use_torch else {}
+    drift_info = _estimate_feature_drift(xs, meta) if use_torch else {
+        "drift_score_0_100": None,
+        "drift_level": "n/a",
+        "mean_abs_z_shift": None,
+    }
     return {
         "model_name": "team-torch-mlp" if use_torch else "team-ml-linear-sgd",
         "enabled": True,
@@ -593,6 +641,7 @@ def apply_dl_scores(
             "gbdt_top_features": meta.get("gbdt_top_features") if use_torch else None,
             "dl_roadmap_version": meta.get("dl_roadmap_version") if use_torch else None,
             "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
+            "feature_drift": drift_info,
         },
         "web_priors": priors_meta,
         "input_features": FEATURE_LABELS,
@@ -602,12 +651,12 @@ def apply_dl_scores(
             "session_pairwise_ranking_aux",
             "sklearn_histgradientboosting_blend_with_nn",
         ],
-        "blend_formula": "0.7*normalizedScore + 0.3*dl_score",
+        "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
         "dl_roadmap": roadmap_payload(),
         "contest_transparency": _contest_transparency_pack(
             enabled=True,
             backend="pytorch" if use_torch else "lightweight-linear",
-            blend_formula="0.7*normalizedScore + 0.3*dl_score",
+            blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
             sample_count=(
                 int(meta.get("sample_count") or 0)
                 if use_torch
@@ -622,6 +671,7 @@ def apply_dl_scores(
                 "feature_version": int(meta.get("feature_version") or FEATURE_VERSION) if use_torch else FEATURE_VERSION,
                 "input_dim": int(meta.get("input_dim") or len(FEATURE_LABELS)) if use_torch else len(FEATURE_LABELS),
                 "dl_quality_unified": meta.get("dl_quality_unified") if use_torch else None,
+                "feature_drift": drift_info,
             },
             target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
         ),

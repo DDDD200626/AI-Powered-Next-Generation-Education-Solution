@@ -150,6 +150,14 @@ def _early_stop_patience(n_samples: int) -> int:
     return max(28, min(52, 18 + n_samples // 4))
 
 
+def _resolve_torch_seed() -> int:
+    """학습 전 구간(CV 셔플/부트스트랩 포함)에 공통 적용할 시드."""
+    try:
+        return int((os.environ.get("TEAM_TORCH_SEED", "42") or "42").strip())
+    except Exception:
+        return 42
+
+
 def _row_group_ids(sess_ids: list[str]) -> list[int]:
     """세션 문자열이 같으면 동일 그룹. 비어 있으면 행마다 별도 그룹(누수 최소화)."""
     key_to_gid: dict[str, int] = {}
@@ -223,6 +231,30 @@ def _cv_fold_train_val_indices(
         tr_idx = idx[:va_start] + idx[va_end:]
         folds_fb.append((tr_idx, va_idx))
     return folds_fb, "index_shuffle"
+
+
+def _rolling_time_fold_indices(n: int, fold_count: int) -> list[tuple[list[int], list[int]]]:
+    """시간 순서 보존 롤링 검증 (과거→미래)."""
+    if n < 8:
+        return []
+    fold_count = max(2, min(fold_count, 6))
+    step = max(2, n // (fold_count + 1))
+    min_train = max(6, n // 5)
+    out: list[tuple[list[int], list[int]]] = []
+    cut = min_train
+    for _ in range(fold_count):
+        va_start = cut
+        va_end = min(n, va_start + step)
+        if va_end - va_start < 2 or va_start < min_train:
+            break
+        tr_idx = list(range(0, va_start))
+        va_idx = list(range(va_start, va_end))
+        if tr_idx and va_idx:
+            out.append((tr_idx, va_idx))
+        cut += step
+        if cut >= n - 2:
+            break
+    return out
 
 
 def _model_size_profile() -> str:
@@ -522,6 +554,52 @@ def _pearson_r_squared(preds: list[float], ys: list[float]) -> tuple[float | Non
     return r, float(r2) if r2 is not None else None
 
 
+def _uncertainty_calibration_stats(preds: list[float], ys: list[float]) -> tuple[float, float]:
+    """|오차| 분포를 이용해 uncertainty를 보정할 scale/bias를 추정."""
+    if not preds or not ys or len(preds) != len(ys):
+        return 1.0, 0.0
+    abs_err = sorted(abs(float(p) - float(y)) for p, y in zip(preds, ys))
+    if not abs_err:
+        return 1.0, 0.0
+    p50 = abs_err[len(abs_err) // 2]
+    p90 = abs_err[min(len(abs_err) - 1, int(len(abs_err) * 0.9))]
+    spread = max(0.5, p90 - p50)
+    scale = max(0.6, min(2.2, spread / 6.0))
+    bias = max(-8.0, min(12.0, p50 - 2.5))
+    return float(scale), float(bias)
+
+
+def _estimate_feature_drift_score(
+    rows: list[dict[str, Any]],
+    tr_means: list[float] | None,
+    tr_stds: list[float] | None,
+) -> float | None:
+    if not rows or not tr_means or not tr_stds:
+        return None
+    d = min(len(tr_means), len(tr_stds), FEATURE_DIM)
+    if d <= 0:
+        return None
+    try:
+        cur_means = [0.0] * d
+        n = 0
+        for r in rows:
+            x = pad_feature_vector([float(v) for v in (r.get("x") or [])])
+            for i in range(d):
+                cur_means[i] += x[i]
+            n += 1
+        if n <= 0:
+            return None
+        cur_means = [v / n for v in cur_means]
+        z = [
+            abs((cur_means[i] - float(tr_means[i])) / max(1e-6, float(tr_stds[i])))
+            for i in range(d)
+        ]
+        mean_abs_z = sum(z) / max(len(z), 1)
+        return max(0.0, min(100.0, 100.0 - min(100.0, mean_abs_z * 22.0)))
+    except Exception:
+        return None
+
+
 def train_torch_if_needed() -> dict[str, Any]:
     if not torch_available():
         return {"enabled": False, "reason": "torch_unavailable"}
@@ -558,14 +636,30 @@ def train_torch_if_needed() -> dict[str, Any]:
         and not incompat
         and not retrain_forced_by_env()
     ):
-        return {
-            "enabled": True,
-            "trained": False,
-            "sample_count": n_pool,
-            "model_version": meta.get("model_version"),
-            "trained_at": meta.get("trained_at"),
-            "reason": "interval_not_reached",
-        }
+        drift_score = _estimate_feature_drift_score(
+            data_eff,
+            meta.get("training_feature_means"),
+            meta.get("training_feature_stds"),
+        )
+        drift_min = float(os.environ.get("TEAM_TORCH_RETRAIN_DRIFT_MIN", "58") or 58.0)
+        if drift_score is not None and drift_score < drift_min:
+            # 분포가 학습 시점과 크게 달라졌으면 간격 미도달이어도 재학습한다.
+            pass
+        else:
+            return {
+                "enabled": True,
+                "trained": False,
+                "sample_count": n_pool,
+                "model_version": meta.get("model_version"),
+                "trained_at": meta.get("trained_at"),
+                "reason": "interval_not_reached",
+            }
+
+    run_seed = _resolve_torch_seed()
+    random.seed(run_seed)
+    torch.manual_seed(run_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(run_seed)
 
     x_all = torch.tensor(
         [pad_feature_vector([float(v) for v in r["x"]]) for r in data_eff], dtype=torch.float32
@@ -578,11 +672,20 @@ def train_torch_if_needed() -> dict[str, Any]:
     xz_all = (x_all - means) / stds
 
     idx = list(range(n))
-    random.Random(42).shuffle(idx)
+    random.Random(run_seed).shuffle(idx)
     fold_count = max(2, min(int(tp["cv_folds"]), n))
-    fold_specs, cv_strategy_name = _cv_fold_train_val_indices(
-        n, sess_ids, fold_count, random.Random(42)
+    fold_specs, cv_strategy_name = _cv_fold_train_val_indices(n, sess_ids, fold_count, random.Random(run_seed))
+    use_rolling = (os.environ.get("TEAM_TORCH_ROLLING_CV", "1") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
     )
+    if use_rolling:
+        roll = _rolling_time_fold_indices(n, fold_count)
+        if roll:
+            fold_specs = roll
+            cv_strategy_name = "rolling_time"
     cv_unique_groups = len(set(_row_group_ids(sess_ids)))
 
     # hyperparameter + architecture search with CV MAE
@@ -652,7 +755,7 @@ def train_torch_if_needed() -> dict[str, Any]:
         split = max(1, int(n * 0.86))
         tr_idx = idx[:split]
         va_idx = idx[split:] if split < n else idx[-1:]
-        rng = random.Random(1000 + m_i)
+        rng = random.Random(run_seed + 1000 + m_i)
         bs_idx = [tr_idx[rng.randrange(len(tr_idx))] for _ in range(len(tr_idx))]
         x_tr = xz_all[bs_idx]
         y_tr = y_all[bs_idx]
@@ -769,6 +872,7 @@ def train_torch_if_needed() -> dict[str, Any]:
     calib_a, calib_b = _linear_calibration(calib_preds, calib_targets)
     calib_b = max(-12.0, min(12.0, calib_b))
     calib_a = max(0.6, min(1.4, calib_a))
+    unc_scale, unc_bias = _uncertainty_calibration_stats(calib_preds, calib_targets)
     calib_pr, calib_r2 = _pearson_r_squared(calib_preds, calib_targets)
     calib_fit_note_ko = (
         "검증에 쓰인 예측(선형 보정 전)·라벨의 피어슨·R². 학습 데이터 위에서 측정되어 낙관될 수 있음."
@@ -830,12 +934,15 @@ def train_torch_if_needed() -> dict[str, Any]:
         "stds": stds.squeeze(0).tolist(),
         "calibration_a": calib_a,
         "calibration_b": calib_b,
+        "uncertainty_scale": unc_scale,
+        "uncertainty_bias": unc_bias,
         "best_hparams": best_h,
         "best_architecture": best_h.get("name", "relu"),
         "feature_version": FEATURE_VERSION,
         "input_dim": in_dim,
         "model_size_profile": tp["name"],
         "mc_dropout_samples": int(tp["mc_dropout"]),
+        "torch_seed": run_seed,
         "approx_parameters": approx_params,
         "gbdt_present": bool(gbdt_blob is not None and gbdt_blend_a is not None),
         "nn_gbdt_blend_alpha": float(gbdt_blend_a) if gbdt_blend_a is not None else None,
@@ -855,6 +962,7 @@ def train_torch_if_needed() -> dict[str, Any]:
         "model_size_profile": tp["name"],
         "approx_parameters": approx_params,
         "mc_dropout_samples": int(tp["mc_dropout"]),
+        "torch_seed": run_seed,
         "validation_mae_mean": round(sum(val_maes) / max(len(val_maes), 1), 4),
         "validation_mae_each": [round(v, 4) for v in val_maes],
         "cv_mae_mean": round(best_cv_mae, 4) if best_cv_mae != float("inf") else None,
@@ -877,8 +985,11 @@ def train_torch_if_needed() -> dict[str, Any]:
         "best_hparams": best_h,
         "best_architecture": best_h.get("name", "relu"),
         "calibration": {"a": round(calib_a, 4), "b": round(calib_b, 4)},
+        "uncertainty_calibration": {"scale": round(unc_scale, 4), "bias": round(unc_bias, 4)},
         "feature_version": FEATURE_VERSION,
         "input_dim": in_dim,
+        "training_feature_means": [round(float(v), 6) for v in means.squeeze(0).tolist()],
+        "training_feature_stds": [round(float(v), 6) for v in stds.squeeze(0).tolist()],
         "gbdt_present": bool(gbdt_blob is not None and gbdt_blend_a is not None),
         "nn_gbdt_blend_alpha": round(float(gbdt_blend_a), 4) if gbdt_blend_a is not None else None,
         "gbdt_validation_blend_mae": round(float(gbdt_blend_mae_va), 4) if gbdt_blend_mae_va is not None else None,
@@ -974,6 +1085,9 @@ def predict_torch_scores_batched(feature_rows: list[list[float]]) -> list[dict[s
     z_dist = xz.abs().mean(dim=1)
     ood_penalty = (z_dist - 2.2).clamp(min=0.0) * 4.0
     uncertainty = (std + ood_penalty).clamp(0.0, 100.0)
+    u_scale = float(state.get("uncertainty_scale") or 1.0)
+    u_bias = float(state.get("uncertainty_bias") or 0.0)
+    uncertainty = (uncertainty * u_scale + u_bias).clamp(0.0, 100.0)
     calibrated = calibrated.clamp(0.0, 100.0)
     if state.get("gbdt_present") and state.get("gbdt_pickled"):
         try:
