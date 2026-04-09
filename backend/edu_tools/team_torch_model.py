@@ -600,6 +600,34 @@ def _estimate_feature_drift_score(
         return None
 
 
+def _promotion_gate_decision(
+    prev_meta: dict[str, Any] | None,
+    cand_meta: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """신규 학습 결과를 실제 운영 모델로 승격할지 판단."""
+    if not prev_meta:
+        return True, ["first_model"]
+    reasons: list[str] = []
+    allow = True
+    mae_tol = float(os.environ.get("TEAM_TORCH_PROMOTE_MAX_MAE_REGRESSION", "0.35") or 0.35)
+    hold_tol = float(os.environ.get("TEAM_TORCH_PROMOTE_MAX_HOLDOUT_REGRESSION", "0.5") or 0.5)
+    prev_val = prev_meta.get("validation_mae_mean")
+    cand_val = cand_meta.get("validation_mae_mean")
+    if isinstance(prev_val, (int, float)) and isinstance(cand_val, (int, float)):
+        if float(cand_val) > float(prev_val) + mae_tol:
+            allow = False
+            reasons.append("validation_mae_regressed")
+    prev_ho = prev_meta.get("holdout_time_mae")
+    cand_ho = cand_meta.get("holdout_time_mae")
+    if isinstance(prev_ho, (int, float)) and isinstance(cand_ho, (int, float)):
+        if float(cand_ho) > float(prev_ho) + hold_tol:
+            allow = False
+            reasons.append("holdout_mae_regressed")
+    if allow:
+        reasons.append("metrics_ok")
+    return allow, reasons
+
+
 def train_torch_if_needed() -> dict[str, Any]:
     if not torch_available():
         return {"enabled": False, "reason": "torch_unavailable"}
@@ -949,8 +977,6 @@ def train_torch_if_needed() -> dict[str, Any]:
     }
     if gbdt_blob is not None and gbdt_blend_a is not None:
         state["gbdt_pickled"] = gbdt_blob
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    torch.save(state, TORCH_MODEL_PATH)
     now = datetime.now(timezone.utc)
     out_meta = {
         "model_version": f"team-torch-{now.strftime('%Y%m%d%H%M%S')}",
@@ -1009,6 +1035,23 @@ def train_torch_if_needed() -> dict[str, Any]:
         "holdout_time_note_ko": holdout_time_note_ko,
     }
     out_meta["dl_quality_unified"] = build_dl_quality_unified(out_meta)
+    promote_ok, promote_reasons = _promotion_gate_decision(meta, out_meta)
+    out_meta["promotion_gate"] = {
+        "accepted": promote_ok,
+        "reasons": promote_reasons,
+    }
+    if not promote_ok:
+        return {
+            "enabled": True,
+            "trained": False,
+            "sample_count": n_pool,
+            "model_version": meta.get("model_version"),
+            "trained_at": meta.get("trained_at"),
+            "reason": "promotion_gate_rejected",
+            "candidate": out_meta,
+        }
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    torch.save(state, TORCH_MODEL_PATH)
     _save_meta(out_meta)
     invalidate_torch_predict_cache()
     return {"enabled": True, "trained": True, **out_meta}
