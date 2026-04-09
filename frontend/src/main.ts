@@ -363,6 +363,11 @@ interface TeamUnifiedReport {
   disclaimer: string;
 }
 
+interface PromotionGateInfo {
+  accepted?: boolean;
+  reasons?: string[];
+}
+
 interface TeamTrendPoint {
   date: string;
   rule_score: number;
@@ -1286,6 +1291,26 @@ function confidenceGateHtml(rep: TeamUnifiedReport): string {
   </section>`;
 }
 
+function promotionGateHtml(rep: TeamUnifiedReport): string {
+  const info = (rep.dl_model_info as { quality?: { promotion_gate?: PromotionGateInfo } } | undefined)
+    ?.quality?.promotion_gate;
+  if (!info) return "";
+  const accepted = !!info.accepted;
+  const reasons = (info.reasons || []).filter((x) => typeof x === "string");
+  const pill = accepted ? "pill-on" : "pill-warn";
+  const label = accepted ? "PROMOTED" : "REJECTED";
+  return `
+  <section class="panel hud-panel">
+    <h3 class="subh">DL 승격 게이트</h3>
+    <p><span class="pill ${pill}">${label}</span> <span class="muted small">신규 학습 모델 자동 승격 판정</span></p>
+    ${
+      reasons.length
+        ? `<ul class="report-flags">${reasons.map((r) => `<li>${escapeHtml(r)}</li>`).join("")}</ul>`
+        : `<p class="muted small">사유 정보 없음</p>`
+    }
+  </section>`;
+}
+
 function whatIfSimulatorHtml(rep: TeamUnifiedReport): string {
   const names = rep.scores.map((s) => s.member_name);
   const selected = state.team.what_if.member_name || names[0] || "";
@@ -1794,11 +1819,12 @@ function teamReportHtml(): string {
     <p class="muted small">데이터 → Score Engine → Anomaly → AI 설명 (점수는 AI가 매기지 않음)</p>
     ${
       rep.dl_model_info
-        ? `<p class="muted small">DL 보강 모델: ${escapeHtml(String(rep.dl_model_info.model_name ?? "enabled"))} · 혼합식 0.7*Rule + 0.3*DL</p>`
+        ? `<p class="muted small">DL 보강 모델: ${escapeHtml(String(rep.dl_model_info.model_name ?? "enabled"))} · 혼합식 ${escapeHtml(String(rep.dl_model_info.blend_formula ?? "dynamic blend"))}</p>`
         : ""
     }
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
     ${confidenceGateHtml(rep)}
+    ${promotionGateHtml(rep)}
     ${edgeCases}
     <div class="report-flow">${scoreSections}</div>
     ${whatIfSimulatorHtml(rep)}
