@@ -7,7 +7,7 @@ import os
 import time
 
 from learning_analysis.llm_clients import (
-    ensure_gemini_configured,
+    gemini_generate_content,
     get_anthropic_client,
     get_openai_client,
     get_openai_xai_client,
@@ -53,19 +53,18 @@ def _user_block(req: LLMCompareRequest) -> str:
 
 
 def call_gemini_freeform(req: LLMCompareRequest, api_key: str) -> LLMTextResult:
-    import google.generativeai as genai
-
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
     system = _build_system(req)
     user = _user_block(req)
-    ensure_gemini_configured(api_key)
-    model = genai.GenerativeModel(model_name=model_name, system_instruction=system)
     try:
-        res = model.generate_content(
+        text = gemini_generate_content(
+            api_key,
+            model_name,
             user,
-            generation_config={"temperature": 0.35, "max_output_tokens": 8192},
+            system_instruction=system,
+            temperature=0.35,
+            max_output_tokens=8192,
         )
-        text = (res.text or "").strip()
         return LLMTextResult(provider="gemini", model_label=model_name, ok=True, text=text[:8000])
     except Exception as e:
         return LLMTextResult(provider="gemini", model_label=model_name, ok=False, error=str(e)[:1500])

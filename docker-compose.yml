@@ -1,23 +1,48 @@
-# 공모전·데모용: 웹 + API 한 번에 기동
-# 사용: docker compose up --build
+# 공모전·데모용: Linux/WSL/macOS/Windows 공통 — 컨테이너 nginx(web) + FastAPI(api) 풀스택
+# Linux: ./scripts/stack-up.sh   또는  docker compose up --build -d
 # 웹: http://127.0.0.1:8080  API 직접: http://127.0.0.1:8000
+#
+# web 은 api 컨테이너가 "시작"되면 바로 뜹니다(health 대기 없음 → 8080 즉시 LISTEN).
+# API 가 준비되기 전에는 nginx 가 502 를 돌려줄 수 있음 → public/502.html 안내.
+# api healthcheck 는 상태 확인·모니터링용(웹 기동을 막지 않음).
+# 무거운 DL/강제 재학습은 .env 또는 compose environment 로만 켜세요 — 기본은 빠른 응답.
+networks:
+  stock_predict:
+    driver: bridge
+
 services:
   api:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    environment:
-      # xlarge(풀 초대형 5층) 전환 후 첫 기동에서 간격 무시하고 재학습. 한 번 성공하면 0으로 바꾸거나 줄을 지우는 것을 권장.
-      TEAM_TORCH_MODEL_SIZE: xlarge
-      TEAM_RETRAIN_FORCE: "1"
     ports:
       - "8000:8000"
+    restart: unless-stopped
+    networks:
+      - stock_predict
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/live', timeout=5).read()",
+        ]
+      interval: 10s
+      timeout: 8s
+      retries: 5
+      start_period: 120s
 
   web:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ""
     ports:
       - "8080:80"
+    restart: unless-stopped
+    networks:
+      - stock_predict
     depends_on:
       - api

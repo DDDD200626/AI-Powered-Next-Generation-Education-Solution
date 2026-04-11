@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
+from contextlib import asynccontextmanager
+from functools import partial
 import threading
 import time
 import uuid
-from collections import deque
+from collections import defaultdict, deque
+from pathlib import Path
 from typing import Any
 
 _APP_START_MONO = time.monotonic()
@@ -15,6 +19,9 @@ _APP_START_MONO = time.monotonic()
 # 최근 요청 처리 시간(프로파일·병목 확인용, 기본 최대 50건)
 _PERF_LOCK = threading.Lock()
 _PERF_RECENT: deque[dict[str, Any]] = deque(maxlen=50)
+
+_RL_LOCK = threading.Lock()
+_RL_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _perf_ring_enabled() -> bool:
@@ -27,8 +34,9 @@ try:
 except ImportError:
     pass
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 
@@ -45,8 +53,69 @@ from edu_tools.team_ml_model import dataset_label_streaming_stats
 from edu_tools.team_model_report import build_limits_report
 from edu_tools.team_unified_eval import router as team_unified_router
 from learning_analysis.compare_freeform import compare_llm_async
+from learning_analysis.connection_dl_advise import router as connection_dl_router
 from learning_analysis.pipeline import analyze_async, provider_keys_status
 from learning_analysis.schemas import AnalyzeRequest, AnalyzeResponse, LLMCompareRequest, LLMCompareResponse
+
+
+def _post_rate_limit_per_minute() -> int:
+    raw = (os.environ.get("EDUSIGNAL_POST_RATE_LIMIT_PER_MINUTE") or "0").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 0
+    return max(0, min(n, 600))
+
+
+def _post_rate_limit_path(path: str) -> bool:
+    """비용 큰 POST만 제한(기본 0=비활성)."""
+    prefixes = (
+        "/api/team/report",
+        "/api/team/evaluate",
+        "/api/analyze",
+        "/api/llm/compare",
+    )
+    return any(path == p or path.startswith(f"{p}/") for p in prefixes)
+
+
+def _rate_limit_client_key(request: Request) -> str:
+    xff = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if xff:
+        return xff[:200]
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _post_rate_limit_should_block(request: Request) -> bool:
+    limit = _post_rate_limit_per_minute()
+    if limit <= 0 or request.method != "POST" or not _post_rate_limit_path(request.url.path):
+        return False
+    now = time.monotonic()
+    key = _rate_limit_client_key(request)
+    with _RL_LOCK:
+        dq = _RL_BUCKETS[key]
+        while dq and now - dq[0] > 60.0:
+            dq.popleft()
+        if len(dq) >= limit:
+            return True
+        dq.append(now)
+    return False
+
+
+def _apply_security_headers(response: Response) -> None:
+    raw = (os.environ.get("EDUSIGNAL_SECURITY_HEADERS", "1") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    hsts = (os.environ.get("EDUSIGNAL_HSTS_MAX_AGE") or "").strip()
+    if hsts.isdigit() and int(hsts) > 0:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            f"max-age={int(hsts)}; includeSubDomains",
+        )
 
 
 def _cors_origins() -> list[str]:
@@ -54,7 +123,8 @@ def _cors_origins() -> list[str]:
         "http://127.0.0.1:5173,http://localhost:5173,"
         "http://127.0.0.1:5174,http://localhost:5174,"
         "http://127.0.0.1:4173,http://localhost:4173,"
-        "http://127.0.0.1:8080,http://localhost:8080"
+        "http://127.0.0.1:8080,http://localhost:8080,"
+        "http://127.0.0.1:8000,http://localhost:8000"
     )
     raw = os.environ.get("CORS_ORIGINS", _default).strip()
     if not raw:
@@ -71,7 +141,7 @@ def _cors_origin_regex() -> str | None:
         return raw
     return (
         r"^http://(192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})"
-        r":(5173|5174|4173|8080)$"
+        r":(5173|5174|4173|8080|8000)$"
     )
 
 
@@ -87,10 +157,24 @@ _APP_DESC = """## 심사기준 정렬
 ## 부가
 학습–시험 분석, 4모델 비교, 이탈·피드백·QnA·토론·루브릭."""
 
+
+@asynccontextmanager
+async def _app_lifespan(app: FastAPI):
+    from learning_analysis.edusignal_autoretrain import (
+        start_edusignal_background_autoretrain,
+        stop_edusignal_background_autoretrain,
+    )
+
+    await start_edusignal_background_autoretrain()
+    yield
+    await stop_edusignal_background_autoretrain()
+
+
 app = FastAPI(
     title="팀 프로젝트 기여도 자동 평가 시스템",
     description=_APP_DESC,
     version="4.7.4",
+    lifespan=_app_lifespan,
 )
 
 
@@ -103,6 +187,8 @@ def _capabilities_payload() -> dict[str, Any]:
             "openapi": "/docs",
             "redoc": "/redoc",
             "contest_rubric_doc": "docs/CONTEST_RUBRIC.md (저장소)",
+            "operations_privacy_doc": "docs/OPERATIONS_AND_LIMITS.md (저장소)",
+            "completion_contract_doc": "docs/ABSOLUTE_COMPLETION.md (저장소) — 영구 완성 불가·태그 단위 완료 선언",
         },
         "rubric": {
             "technical_completeness": {
@@ -150,7 +236,11 @@ def _capabilities_payload() -> dict[str, Any]:
                 "evidence": [
                     "POST /api/team/report → dl_model_info.contest_transparency",
                     "edu_tools/team_unified_eval.py — _contest_transparency_pack",
-                    "edu_tools/team_torch_model.py — 학습·추론",
+                    "edu_tools/team_torch_model.py — 학습·추론·TEAM_TORCH_CONTEST_MAX(심사 최고 품질 프리셋)",
+                    "learning_analysis/edusignal_autoretrain.py — 백그라운드 주기 재학습(새 샘플·드리프트 반영)",
+                    "team_torch_model.meta.json → dl_quality_unified.contest_max_quality",
+                    "dl_model_info.prior_calibration · TEAM_WEB_PRIORS_* (승인 JSON 벤치마크 보정)",
+                    "프론트 팀 리포트 — 외부·벤치마크 priors 보정 패널",
                 ],
             },
         },
@@ -174,13 +264,28 @@ def _capabilities_payload() -> dict[str, Any]:
             "rubric_draft": "POST /api/rubric/draft",
             "team_model_limits_report": "GET /api/team/model/limits-report",
             "team_dataset_label_summary": "GET /api/team/data/dataset-label-summary",
+            "team_training_backup": "POST /api/team/data/backup-artifacts",
             "team_benchmark_narrow": "POST /api/team/benchmark-narrow",
+            "connection_advise": "POST /api/connection/advise",
         },
     }
 
 
 @app.middleware("http")
 async def add_request_id_and_timing(request: Request, call_next):
+    if _post_rate_limit_should_block(request):
+        rid = request.headers.get("x-request-id") or str(uuid.uuid4())
+        resp = JSONResponse(
+            status_code=429,
+            content={
+                "detail": "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
+                "retry_after_sec": 60,
+            },
+        )
+        resp.headers["X-Request-ID"] = rid
+        resp.headers["Retry-After"] = "60"
+        _apply_security_headers(resp)
+        return resp
     rid = request.headers.get("x-request-id") or str(uuid.uuid4())
     request.state.request_id = rid
     t0 = time.perf_counter()
@@ -188,6 +293,7 @@ async def add_request_id_and_timing(request: Request, call_next):
     ms = (time.perf_counter() - t0) * 1000
     response.headers["X-Request-ID"] = rid
     response.headers["X-Process-Time-Ms"] = f"{ms:.2f}"
+    _apply_security_headers(response)
     if _perf_ring_enabled():
         with _PERF_LOCK:
             _PERF_RECENT.append(
@@ -209,6 +315,7 @@ app.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])
 app.include_router(course_qa_router, prefix="/api/course", tags=["course"])
 app.include_router(discussion_router, prefix="/api/discussion", tags=["discussion"])
 app.include_router(rubric_align_router, prefix="/api/rubric", tags=["rubric"])
+app.include_router(connection_dl_router, prefix="/api/connection", tags=["connection"])
 
 _cors_kw: dict[str, Any] = {
     "allow_origins": _cors_origins(),
@@ -271,6 +378,16 @@ async def api_team_data_trends(response: Response, days: int = 30, member_name: 
         "status": "ok",
         "trends": contribution_trends(days=days, member_name=member_name or None),
     }
+
+
+@app.post("/api/team/data/backup-artifacts")
+async def api_team_training_backup(response: Response):
+    """학습 데이터·선형·PyTorch 가중치를 `edu_tools/data/backups/`(또는 TEAM_DATA_BACKUP_ROOT)에 타임스탬프 폴더로 복사."""
+    from edu_tools.team_training_backup import backup_team_training_artifacts
+
+    response.headers["Cache-Control"] = "no-store"
+    out = await asyncio.to_thread(partial(backup_team_training_artifacts, reason="api"))
+    return {"status": "ok", **out}
 
 
 @app.get("/api/team/data/dataset-label-summary")
@@ -350,3 +467,57 @@ async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
 @app.post("/api/llm/compare", response_model=LLMCompareResponse)
 async def api_llm_compare(body: LLMCompareRequest) -> LLMCompareResponse:
     return await compare_llm_async(body)
+
+
+# --- SPA: Vite 빌드(frontend/dist)를 API와 동일 출처(예: :8000)로 제공 — 로컬은 npm start 한 주소만 열면 됨 ---
+def _frontend_dist_dir() -> Path | None:
+    raw = os.environ.get("FRONTEND_DIST", "").strip()
+    if raw:
+        p = Path(raw)
+        return p if p.is_dir() and (p / "index.html").is_file() else None
+    # backend/learning_analysis/main.py → 저장소 루트
+    repo = Path(__file__).resolve().parent.parent.parent
+    p = repo / "frontend" / "dist"
+    return p if p.is_dir() and (p / "index.html").is_file() else None
+
+
+def _safe_file_in_dist(dist: Path, relative: str) -> Path | None:
+    if not relative or relative.startswith("/"):
+        return None
+    dist_r = dist.resolve()
+    candidate = (dist_r / relative).resolve()
+    try:
+        candidate.relative_to(dist_r)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
+_spa_dist = _frontend_dist_dir()
+if _spa_dist is not None:
+    from starlette.staticfiles import StaticFiles
+
+    _spa_assets = _spa_dist / "assets"
+    if _spa_assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(_spa_assets)), name="spa_assets")
+
+    @app.get("/", include_in_schema=False)
+    async def spa_root() -> FileResponse:
+        return FileResponse(_spa_dist / "index.html")
+
+    _spa_502 = _spa_dist / "502.html"
+    if _spa_502.is_file():
+
+        @app.get("/502.html", include_in_schema=False)
+        async def spa_502() -> FileResponse:
+            return FileResponse(_spa_502)
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    async def spa_history_fallback(spa_path: str) -> FileResponse:
+        # /docs, /openapi.json, /api/* 등은 위에서 이미 처리됨. 여기까지 온 비파일 경로는 SPA로 넘김.
+        if spa_path.startswith("api") or spa_path in ("docs", "redoc", "openapi.json"):
+            raise HTTPException(status_code=404)
+        hit = _safe_file_in_dist(_spa_dist, spa_path)
+        if hit is not None:
+            return FileResponse(hit)
+        return FileResponse(_spa_dist / "index.html")

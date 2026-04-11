@@ -1,4 +1,7 @@
 .env
+frontend/.env.development.local
+# 로컬 실험 스냅샷(JSON은 필요 시만 커밋)
+backend/edu_tools/data/experiment_snapshots/*.json
 .venv/
 venv/
 __pycache__/
@@ -19,6 +22,9 @@ backend/edu_tools/data/team_torch_model.meta.json
 backend/edu_tools/data/team_ml_fp_ring.json
 backend/edu_tools/data/team_external_train.cache.jsonl
 backend/edu_tools/data/team_external_train.cache.meta.json
+# 로컬 백업·nginx 로그
+backend/edu_tools/data/backups/
+tools/nginx-win/**/logs/
 # 로컬 nginx (Windows 스크립트)
 nginx/logs/
 nginx/temp/

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-ROADMAP_VERSION = 5
+ROADMAP_VERSION = 6
 
 PHASES_KO: tuple[str, ...] = (
     "1) 데이터 늘리기 — JSONL 누적·TEAM_TRAIN_RESERVOIR_MAX·합성 배치(team_synthetic_bulk)",
@@ -15,10 +15,10 @@ PHASES_KO: tuple[str, ...] = (
     "3) 이상 샘플 정리 — TEAM_TRAIN_OUTLIER_IQR_K 로 라벨 y IQR 밖 행 제거(학습 행 부족 시 자동 유지)",
     "4) 피처 확장 — FEATURE_VERSION·34차원 build_feature_vector(형태 신호 + 선택적 다국어 문장 임베딩 8차원)",
     "5) 시간 홀드아웃 — TEAM_HOLDOUT_TIME_FRAC 로 최근 구간을 학습에서 제외·holdout_time_mae/pearson/r2 기록",
-    "6) 세션 CV·앙상블 — 동일 sess 누수 방지·PyTorch MLP 앙상블·MC 드롭아웃·GBDT 블렌드",
+    "6) 세션 CV·앙상블 — 동일 sess 누수 방지·PyTorch MLP 앙상블·MC 드롭아웃·GBDT 블렌드·의미 차원 학습 규제(semantic_train_regularization)",
     "7) 하이퍼 탐색 확대 — TEAM_TORCH_EXTENDED_HP=1 시 그리드 변형 후보 추가(시간↑)",
-    "8) 용량 프로파일 — standard / large / xlarge_lite(CPU 경량 5층) / xlarge / xxl·TEAM_TORCH_ENSEMBLE 등",
-    "9) 품질 메타 — dl_quality_unified: CV·tail·캘리브·시간 홀드아웃·데이터 파이프라인",
+    "8) 용량 프로파일 — standard / large / xlarge_lite(CPU 경량 5층) / xlarge / xxl·TEAM_TORCH_ENSEMBLE·TEAM_TORCH_CONTEST_MAX(심사 최고 품질)",
+    "9) 품질 메타 — dl_quality_unified: CV·tail·캘리브·시간 홀드아웃·데이터 파이프라인·training_regularization",
     "10) API·감사 — GET /api/capabilities·dataset-label-summary·dataset SHA-256·GET /api/team/report",
 )
 
@@ -26,7 +26,7 @@ PHASES_KO: tuple[str, ...] = (
 def build_dl_quality_unified(meta: Mapping[str, Any]) -> dict[str, Any]:
     """학습 메타에서 추적용 품질 지표를 한 객체로 묶는다."""
     return {
-        "schema": "dl_quality_unified_v4",
+        "schema": "dl_quality_unified_v6",
         "cv": {
             "split_strategy": meta.get("cv_split_strategy"),
             "unique_groups": meta.get("cv_unique_groups"),
@@ -68,10 +68,21 @@ def build_dl_quality_unified(meta: Mapping[str, Any]) -> dict[str, Any]:
             "input_noise_std_training": meta.get("input_noise_std_training"),
             "note_ko": (
                 "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. "
-                "입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+                "입력 노이즈·의미 차원 규제는 학습 중에만 적용되는 일반화입니다."
+            ),
+        },
+        "training_regularization": {
+            "semantic_embedding": meta.get("semantic_train_regularization"),
+            "note_ko": (
+                "semantic_embedding: 학습 순전파에서만 문장 임베딩 차원(끝 8개)에 블록 드롭아웃·스케일을 적용할 수 있습니다. "
+                "추론·리포트 피처는 그대로입니다."
             ),
         },
         "dl_roadmap_version": meta.get("dl_roadmap_version"),
+        "contest_max_quality": {
+            "active": bool(meta.get("contest_max_quality_preset")),
+            "note_ko": meta.get("rubric_submission_note_ko"),
+        },
     }
 
 

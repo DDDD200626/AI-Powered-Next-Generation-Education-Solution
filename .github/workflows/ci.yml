@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TEAM_SEMANTIC_ENCODER: "0"
+      TEAM_TORCH_MODEL_SIZE: "standard"
+      EDUSIGNAL_AUTO_RETRAIN_BACKGROUND: "0"
     defaults:
       run:
         shell: bash

@@ -21,6 +21,39 @@ def test_health_ok_and_request_id_header() -> None:
     assert body.get("openapi_docs") == "/docs"
     assert r.headers.get("X-Request-ID")
     assert r.headers.get("X-Process-Time-Ms")
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("X-Frame-Options") == "DENY"
+    assert r.headers.get("Referrer-Policy")
+
+
+def test_post_rate_limit_returns_429(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EDUSIGNAL_POST_RATE_LIMIT_PER_MINUTE>0 일 때 무거운 POST에 분당 상한 적용."""
+    monkeypatch.setenv("EDUSIGNAL_POST_RATE_LIMIT_PER_MINUTE", "1")
+    body = {
+        "project_name": "요율 테스트",
+        "project_description": "",
+        "evaluation_criteria": "",
+        "members": [
+            {
+                "name": "A",
+                "role": "",
+                "commits": 5,
+                "pull_requests": 1,
+                "lines_changed": 100,
+                "tasks_completed": 2,
+                "meetings_attended": 2,
+                "self_report": "",
+                "peer_notes": "",
+                "timeline": [],
+            },
+        ],
+        "collaboration_edges": [],
+    }
+    r1 = client.post("/api/team/evaluate/compare", json=body)
+    assert r1.status_code == 200
+    r2 = client.post("/api/team/evaluate/compare", json=body)
+    assert r2.status_code == 429
+    assert r2.json().get("detail")
 
 
 def test_version_endpoint() -> None:
@@ -30,6 +63,29 @@ def test_version_endpoint() -> None:
     assert data["name"]
     assert data["version"]
     assert "/docs" in data.get("openapi_docs", "")
+
+
+def test_connection_advise_mlp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CONNECTION_ADVISE_GEMINI", "0")
+    r = client.post(
+        "/api/connection/advise",
+        json={
+            "samples": [
+                {"ok": True, "latency_ms": 180},
+                {"ok": True, "latency_ms": 220},
+            ],
+            "navigator_online": True,
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "stability_score" in data
+    assert 0.0 <= data["stability_score"] <= 1.0
+    assert isinstance(data.get("aggressive_retry"), bool)
+    assert isinstance(data.get("suggested_poll_ms"), int)
+    assert data.get("mlp_baseline_score") is not None
+    assert isinstance(data.get("coach_brief_ko"), str) and data["coach_brief_ko"]
+    assert data.get("enhancer") in ("mlp", "mlp+gemini", "mlp+gemini_failed")
 
 
 def test_perf_recent() -> None:
@@ -89,8 +145,10 @@ def test_capabilities_contest_rubric() -> None:
     assert "creativity" in rub
     assert "deep_learning_assist" in rub
     assert data.get("dl_roadmap", {}).get("phase_count") == 10
-    assert data.get("dl_roadmap", {}).get("version") == 5
+    assert data.get("dl_roadmap", {}).get("version") == 6
     assert data.get("dl_roadmap", {}).get("scope_note_ko")
+    assert (data.get("documentation") or {}).get("operations_privacy_doc")
+    assert (data.get("documentation") or {}).get("completion_contract_doc")
     csp = data.get("contest_submission_pack") or {}
     assert csp.get("verification_order")
     assert csp.get("json_paths", {}).get("dl_quality_unified")
@@ -99,6 +157,7 @@ def test_capabilities_contest_rubric() -> None:
     assert data["endpoints"].get("ready") == "GET /api/ready"
     assert data["endpoints"].get("perf_recent") == "GET /api/perf/recent"
     assert data["endpoints"].get("team_dataset_label_summary") == "GET /api/team/data/dataset-label-summary"
+    assert data["endpoints"].get("team_training_backup") == "POST /api/team/data/backup-artifacts"
     assert r.headers.get("X-Request-ID")
 
 
@@ -108,6 +167,15 @@ def test_dataset_label_summary_ok() -> None:
     body = r.json()
     assert body.get("status") == "ok"
     assert "lines_scanned" in (body.get("stats") or {})
+
+
+def test_team_training_backup_artifacts_ok() -> None:
+    r = client.post("/api/team/data/backup-artifacts")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("status") == "ok"
+    assert body.get("backup_dir")
+    assert isinstance(body.get("copied"), list)
 
 
 def test_dataset_label_summary_schema_is_stable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,6 +282,59 @@ def test_team_evaluate_heuristic_has_creative_insights() -> None:
     assert r.headers.get("X-Request-ID")
 
 
+def test_team_evaluate_instructor_freerider_overrides() -> None:
+    body = {
+        "project_name": "오버라이드 테스트",
+        "project_description": "",
+        "evaluation_criteria": "",
+        "members": [
+            {
+                "name": "김개발",
+                "role": "백엔드",
+                "commits": 12,
+                "pull_requests": 3,
+                "lines_changed": 400,
+                "tasks_completed": 4,
+                "meetings_attended": 3,
+                "self_report": "구현과 리뷰를 맡았습니다.",
+                "peer_notes": "",
+                "timeline": [],
+                "instructor_freerider_override": "confirm_suspicion",
+                "instructor_override_note": "협업 이슈 면담 기록",
+            },
+            {
+                "name": "이문서",
+                "role": "기획",
+                "commits": 2,
+                "pull_requests": 1,
+                "lines_changed": 50,
+                "tasks_completed": 5,
+                "meetings_attended": 4,
+                "self_report": "문서와 회의 진행.",
+                "peer_notes": "",
+                "timeline": [],
+                "instructor_freerider_override": "clear_suspicion",
+                "instructor_override_note": "비가시 기여 확인",
+            },
+        ],
+        "collaboration_edges": [],
+    }
+    r = client.post("/api/team/evaluate", json=body)
+    assert r.status_code == 200
+    data = r.json()
+    m0 = next(x for x in data["members"] if x["name"] == "김개발")
+    m1 = next(x for x in data["members"] if x["name"] == "이문서")
+    assert m0["instructor_freerider_override"] == "confirm_suspicion"
+    assert m0["instructor_override_note"] == "협업 이슈 면담 기록"
+    assert m0["free_rider_suspected"] is True
+    assert m0.get("freerider_override_effect_ko")
+    assert any("교육자 오버라이드" in s for s in m0.get("free_rider_signals", []))
+    assert m1["instructor_freerider_override"] == "clear_suspicion"
+    assert m1["free_rider_suspected"] is False
+    assert m1.get("freerider_override_effect_ko")
+    assert "교육자 무임승차 오버라이드 반영 2건" in (data.get("free_rider_summary") or "")
+
+
 def test_team_evaluate_compare_no_api_keys_returns_models(monkeypatch: pytest.MonkeyPatch) -> None:
     """키가 없을 때도 비교 엔드포인트는 200 + 모델별 오류 메시지로 응답."""
     for k in (
@@ -317,3 +438,31 @@ def test_team_report_unified_pipeline() -> None:
     assert "ai_meta" in data and isinstance(data["ai_meta"], dict)
     assert "team_narrative" in data
     assert isinstance(data.get("team_narrative"), str)
+
+
+def test_team_report_deep_learning_disabled() -> None:
+    r = client.post(
+        "/api/team/report",
+        json={
+            "project_name": "DL 끔",
+            "use_deep_learning": False,
+            "teamData": [
+                {
+                    "name": "A",
+                    "commits": 10,
+                    "prs": 2,
+                    "lines": 400,
+                    "attendance": 80,
+                    "selfReport": "test",
+                },
+            ],
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    dl = data.get("dl_model_info") or {}
+    assert dl.get("enabled") is False
+    assert dl.get("reason") == "client_disabled"
+    s0 = data["scores"][0]
+    assert s0.get("dl_score") is None
+    assert s0.get("blendedScore") is None

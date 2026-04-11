@@ -13,7 +13,16 @@ if (-not (Test-Path (Join-Path $nginxDir "mime.types"))) {
     Write-Error "nginx/mime.types 없음"
 }
 if (-not (Test-Path (Join-Path $dist "index.html"))) {
-    Write-Warning "frontend/dist/index.html 없음. 실행: cd frontend; npm run build"
+    Write-Error "frontend/dist/index.html 없음. 먼저: cd frontend; npm ci; npm run build"
+}
+
+try {
+    $busy = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue
+    if ($busy) {
+        Write-Error "포트 8080 이 이미 사용 중입니다. docker compose web 이거나 다른 nginx 일 수 있습니다. 중지 후 다시 실행하세요."
+    }
+} catch {
+    # 일부 환경에서는 TCP 조회가 제한될 수 있음 — nginx 기동 시 바인딩 오류로 판별
 }
 
 New-Item -ItemType Directory -Force -Path (Join-Path $nginxDir "logs") | Out-Null

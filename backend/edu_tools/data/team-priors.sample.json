@@ -5,5 +5,23 @@
     "lines_expectation": 54.0,
     "attendance_expectation": 70.0,
     "self_report_words_expectation": 45.0
+  },
+  "prior_strength": 0.45,
+  "max_delta": 12.0,
+  "gap_weights": {
+    "commit": 5.0,
+    "pr": 4.0,
+    "lines": 2.0,
+    "attendance": 3.0,
+    "self_report": 1.2
+  },
+  "source_title": "샘플: 공개 팀프로젝트 통계(가상)",
+  "methodology_note_ko": "외부 보고서·기관 공개 요약의 중앙값을 기대치로 두고, 본 과제 팀과의 갭만 소폭 반영합니다. 실제 운영 시 기관 승인 데이터로 교체하세요.",
+  "cohort": "SAMPLE_ONLY",
+  "valid_until": "2026-12-31",
+  "benchmark_inference": {
+    "enabled": false,
+    "blend_weight": 0.35,
+    "note_ko": "true로 두면 외부 priors 기대값 대비 정렬 점수(0–100)를 NN dl_score와 혼합합니다. 심사 시 재학습 대신 이 경로만 쓰려면 deep_learning_accumulate_samples=false 권장."
   }
 }

@@ -34,7 +34,12 @@ from edu_tools.team_ml_model import (
     predict_score,
     train_if_needed,
 )
-from edu_tools.team_web_priors import get_web_priors
+from edu_tools.team_research_evidence import compute_research_z_alignment, load_research_evidence
+from edu_tools.team_web_priors import (
+    compute_external_benchmark_score,
+    compute_prior_score_delta,
+    get_web_priors,
+)
 from edu_tools.team_lm_embedding import semantic_encoder_meta
 from edu_tools.team_torch_model import (
     TORCH_MODEL_PATH,
@@ -44,7 +49,7 @@ from edu_tools.team_torch_model import (
     torch_model_meta,
     train_torch_if_needed,
 )
-from learning_analysis.llm_clients import ensure_gemini_configured, get_openai_client
+from learning_analysis.llm_clients import gemini_generate_content, get_openai_client
 
 router = APIRouter()
 
@@ -69,6 +74,14 @@ class TeamUserIn(BaseModel):
 class TeamReportRequest(BaseModel):
     project_name: str = Field("", max_length=300)
     teamData: list[TeamUserIn] = Field(..., min_length=1, max_length=40)
+    use_deep_learning: bool = Field(
+        True,
+        description="False면 Rule 기반 점수만 사용하고 PyTorch/경량 ML 보조(dl_score·혼합)를 건너뜁니다.",
+    )
+    deep_learning_accumulate_samples: bool = Field(
+        True,
+        description="False면 이번 요청을 학습 풀에 넣지 않고 추론만(기존 가중치로 예측). use_deep_learning=True일 때만 적용.",
+    )
 
 
 class ScoreBreakdown(BaseModel):
@@ -114,11 +127,29 @@ class ScoreResult(BaseModel):
         default=None,
         ge=0,
         le=100,
-        description="최종 점수: 0.7 * normalizedScore + 0.3 * dl_score",
+        description="최종 점수: rule_w*normalizedScore + dl_w*dl_score (dl_w는 신뢰도·불확실도·드리프트·검증 MAE로 동적)",
     )
     dl_top_factors: list[str] = Field(
         default_factory=list,
         description="DL 점수에 크게 영향을 준 요인 Top3",
+    )
+    external_benchmark_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="외부 JSON 기대값 대비 정렬 점수(학습 없이 추론만; benchmark_inference 켜진 경우)",
+    )
+    llm_alignment_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="선택적 LLM 정렬 점수(TEAM_DL_LLM_ASSIST=1일 때만; dl_score와 소폭 혼합)",
+    )
+    research_alignment_score: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="논문·연구 JSON normative 분포 대비 z-정합(TEAM_RESEARCH_DATA_FILE·integration.enabled)",
     )
 
 
@@ -260,14 +291,27 @@ def _scaled_by_team(value: float, base: float, cap_mult: float = 2.5) -> float:
     return min(100.0, 100.0 * min(cap_mult, value / m) / cap_mult)
 
 
-def _blend_weights_from_confidence(dl_confidence: float | None, dl_uncertainty: float | None) -> tuple[float, float]:
-    """DL 신뢰도/불확실도 기반 동적 블렌딩 가중치."""
+def _blend_weights_from_confidence(
+    dl_confidence: float | None,
+    dl_uncertainty: float | None,
+    *,
+    drift_level: str = "n/a",
+    validation_mae_mean: float | None = None,
+) -> tuple[float, float]:
+    """DL 신뢰도·불확실도·(PyTorch 시) 피처 드리프트·검증 MAE로 블렌딩 가중치를 정한다."""
     c = float(dl_confidence or 0.0)
     u = float(dl_uncertainty or 0.0)
     conf_term = max(0.0, min(1.0, c / 100.0))
     unc_term = max(0.0, min(1.0, 1.0 - (u / 100.0)))
-    dl_w = 0.22 + 0.26 * ((0.65 * conf_term) + (0.35 * unc_term))
-    dl_w = max(0.22, min(0.48, dl_w))
+    dl_w = 0.24 + 0.28 * ((0.62 * conf_term) + (0.38 * unc_term))
+    floor_w, ceil_w = 0.21, 0.48
+    vmae = float(validation_mae_mean) if validation_mae_mean is not None else None
+    if vmae is not None and vmae < 7.2 and drift_level == "low":
+        ceil_w = 0.53
+    if drift_level == "high":
+        dl_w *= 0.82
+        ceil_w = min(ceil_w, 0.42)
+    dl_w = max(floor_w, min(ceil_w, dl_w))
     return 1.0 - dl_w, dl_w
 
 
@@ -484,7 +528,7 @@ def apply_dl_scores(
             "contest_transparency": _contest_transparency_pack(
                 enabled=False,
                 backend="none",
-                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty/drift/val_mae)",
                 sample_count=None,
                 use_torch=False,
                 quality={},
@@ -493,6 +537,31 @@ def apply_dl_scores(
         }
 
     priors, priors_meta = get_web_priors()
+    research_profile, research_meta = load_research_evidence()
+    local_service_only = (os.environ.get("EDUSIGNAL_LOCAL_MODEL") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if local_service_only:
+        from edu_tools.team_web_priors import _default_adjustment, _default_benchmark_inference, _default_priors
+
+        priors = _default_priors()
+        prior_adj0 = {**_default_adjustment(), "prior_strength": 0.0}
+        bi0 = {**_default_benchmark_inference(), "enabled": False, "blend_weight": 0.0}
+        priors_meta = {
+            **priors_meta,
+            "edusignal_local_model": True,
+            "prior_adjustment": prior_adj0,
+            "benchmark_inference": bi0,
+        }
+        research_profile = None
+        rm = research_meta if isinstance(research_meta, dict) else {}
+        research_meta = {**rm, "active": False, "edusignal_local_model": True}
+    prior_adj = priors_meta.get("prior_adjustment") if isinstance(priors_meta.get("prior_adjustment"), dict) else {}
+    bench_cfg = priors_meta.get("benchmark_inference") if isinstance(priors_meta.get("benchmark_inference"), dict) else {}
+    prior_deltas: list[float] = []
     m_c = _median([float(u.commits) for u in users])
     m_p = _median([float(u.prs) for u in users])
     m_l = _median([float(u.lines) for u in users])
@@ -569,12 +638,12 @@ def apply_dl_scores(
             "enabled": False,
             "reason": "model_not_ready",
             "sample_count": sc,
-            "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+            "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty/drift/val_mae)",
             "dl_roadmap": roadmap_payload(),
             "contest_transparency": _contest_transparency_pack(
                 enabled=False,
                 backend="none",
-                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+                blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty/drift/val_mae)",
                 sample_count=sc,
                 use_torch=False,
                 quality={"note_ko": "학습 표본 부족 등으로 모델 미가동"},
@@ -610,7 +679,19 @@ def apply_dl_scores(
                 hist_density=hd,
             )
         )
+    torch_meta_early: dict[str, Any] = torch_model_meta() if use_torch else {}
+    drift_preview = (
+        _estimate_feature_drift(xs, torch_meta_early)
+        if use_torch and xs
+        else {"drift_level": "n/a", "drift_score_0_100": None, "mean_abs_z_shift": None}
+    )
+    vmae_early = (
+        float(torch_meta_early["validation_mae_mean"])
+        if use_torch and torch_meta_early.get("validation_mae_mean") is not None
+        else None
+    )
     batch_torch = predict_torch_scores_batched(xs) if use_torch else None
+    unc_list: list[float | None] = []
     for i, (u, s) in enumerate(zip(users, scores)):
         hb, hr, hd = hist_cache[u.name.strip()]
         x = xs[i]
@@ -645,13 +726,26 @@ def apply_dl_scores(
             dl_score = predict_score(model, x)
         if dl_score is None:
             dl_score = float(s.normalizedScore)
-        # Optional web priors adjustment (small bounded delta)
-        commit_gap = min(1.0, max(0.0, x[0] / math.log1p(30))) - (priors["commit_expectation"] / 100.0)
-        pr_gap = min(1.0, max(0.0, x[1] / math.log1p(12))) - (priors["pr_expectation"] / 100.0)
-        att_gap = x[3] - (priors["attendance_expectation"] / 100.0)
-        prior_delta = (commit_gap * 5.0) + (pr_gap * 4.0) + (att_gap * 3.0)
+        # 외부·로컬 벤치마크 priors 보정 (강도·가중·상한은 team_web_priors)
+        prior_delta, _gap_dbg = compute_prior_score_delta(x, priors, prior_adj)
+        prior_deltas.append(prior_delta)
         dl_score = max(0.0, min(100.0, dl_score + prior_delta))
-        # Explainability: 베이스 지표 + 팀 상대 지표 중 영향 큰 순
+        s.external_benchmark_score = None
+        if bench_cfg.get("enabled"):
+            ext_s, _ext_d = compute_external_benchmark_score(x, priors)
+            s.external_benchmark_score = round(float(ext_s), 2)
+            bw = float(bench_cfg.get("blend_weight", 0.3))
+            bw = max(0.0, min(1.0, bw))
+            dl_score = max(0.0, min(100.0, (1.0 - bw) * dl_score + bw * float(ext_s)))
+        s.research_alignment_score = None
+        if research_profile and research_meta.get("active"):
+            ra, _ra_d = compute_research_z_alignment(x, research_profile)
+            s.research_alignment_score = round(float(ra), 2)
+            rbw = float(research_meta.get("blend_weight", 0.1))
+            rbw = max(0.0, min(0.45, rbw))
+            dl_score = max(0.0, min(100.0, (1.0 - rbw) * dl_score + rbw * float(ra)))
+        s.dl_score = round(dl_score, 2)
+        # Explainability: 베이스·팀 상대·텍스트·(옵션) 임베딩 + DL·Rule 갭
         pri = [
             ("커밋 활동", x[0] - (priors["commit_expectation"] / 100.0)),
             ("PR 협업", x[1] - (priors["pr_expectation"] / 100.0)),
@@ -677,22 +771,44 @@ def apply_dl_scores(
             ("서술 숫자 비율", x[22] - 0.5),
             ("서술 장단어 비율", x[23] - 0.5),
         ]
-        factors = pri + rel + hist + txt_feats
+        sem: list[tuple[str, float]] = []
+        for j in range(24, min(len(x), len(FEATURE_LABELS))):
+            if abs(float(x[j])) > 1e-5:
+                sem.append((FEATURE_LABELS[j], float(x[j])))
+        gap = float(s.dl_score) - float(s.normalizedScore)
+        gap_feat: list[tuple[str, float]] = (
+            [("DL·Rule 점수차", gap / 26.0)] if abs(gap) >= 3.5 else []
+        )
+        factors = pri + rel + hist + txt_feats + sem + gap_feat
         top = sorted(factors, key=lambda t: abs(t[1]), reverse=True)[:3]
         s.dl_top_factors = [f"{name} {'+' if val >= 0 else '-'}" for name, val in top]
-        # 입력 다양도 기반 confidence 보정
+        # 입력 다양도·MC 불확실도·배치 드리프트·검증 MAE로 confidence
         x_min, x_max = min(x), max(x)
         spread = x_max - x_min
         conf = max(0.0, min(100.0, conf_base + spread * 8.0))
         if dl_uncertainty is not None:
-            conf = max(0.0, min(100.0, conf - min(20.0, dl_uncertainty * 3.0)))
-        s.dl_score = round(dl_score, 2)
+            conf = max(0.0, min(100.0, conf - min(26.0, dl_uncertainty * 3.5)))
+        dlv = str(drift_preview.get("drift_level") or "n/a")
+        if dlv == "high":
+            conf = max(0.0, min(100.0, conf * 0.88))
+        elif dlv == "low" and use_torch and vmae_early is not None and vmae_early < 7.8:
+            conf = min(100.0, conf * 1.035)
         s.dl_confidence = round(conf, 1)
-        rule_w, dl_w = _blend_weights_from_confidence(s.dl_confidence, dl_uncertainty)
+        rule_w, dl_w = _blend_weights_from_confidence(
+            s.dl_confidence,
+            dl_uncertainty,
+            drift_level=dlv,
+            validation_mae_mean=vmae_early,
+        )
         s.blendedScore = round(rule_w * s.normalizedScore + dl_w * s.dl_score, 2)
+        unc_list.append(dl_uncertainty)
 
-    meta = torch_model_meta() if use_torch else {}
-    drift_info = _estimate_feature_drift(xs, meta) if use_torch else {
+    from edu_tools.team_dl_llm_assist import apply_dl_llm_assist_layer
+
+    llm_meta = apply_dl_llm_assist_layer(users, scores, unc_list)
+
+    meta = torch_meta_early if use_torch else {}
+    drift_info = drift_preview if use_torch else {
         "drift_score_0_100": None,
         "drift_level": "n/a",
         "mean_abs_z_shift": None,
@@ -710,7 +826,25 @@ def apply_dl_scores(
         torch_info=torch_info,
         sample_count=sc_for_ops,
     )
-    return {
+    _pds = prior_deltas
+    prior_calibration: dict[str, Any] = {
+        "adjustment": prior_adj,
+        "delta_stats": (
+            {
+                "min": round(min(_pds), 3),
+                "max": round(max(_pds), 3),
+                "mean": round(sum(_pds) / len(_pds), 3),
+                "abs_max": round(max(abs(x) for x in _pds), 3),
+            }
+            if _pds
+            else {"min": None, "max": None, "mean": None, "abs_max": None}
+        ),
+        "note_ko": (
+            "공개 벤치마크·기관 통계에서 정의한 기대값(priors)과 입력 피처의 차이로 "
+            "DL 보조 점수를 가중·상한이 있는 범위에서만 보정합니다. 외부 자료는 학습 라벨이 아니라 교정(calibration) 용도입니다."
+        ),
+    }
+    out: dict[str, Any] = {
         "model_name": "team-torch-mlp" if use_torch else "team-ml-linear-sgd",
         "enabled": True,
         "model_version": (meta.get("model_version") if use_torch else model.version if model else None),
@@ -754,19 +888,25 @@ def apply_dl_scores(
             "semantic_encoder": semantic_encoder_meta(),
         },
         "web_priors": priors_meta,
+        "benchmark_inference": priors_meta.get("benchmark_inference"),
+        "prior_calibration": prior_calibration,
+        "research_evidence": research_meta,
         "input_features": FEATURE_LABELS,
         "target_mix": f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
         "beyond_rule_signals": [
             "sqlite_member_history_prior",
             "session_pairwise_ranking_aux",
             "sklearn_histgradientboosting_blend_with_nn",
+            "allowlisted_json_benchmark_priors",
+            "research_normative_z_profile_json",
         ],
-        "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+        "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty/drift/val_mae)",
+        "dl_blend_policy": "v2_drift_valmae_semantic_gap_factors",
         "dl_roadmap": roadmap_payload(),
         "contest_transparency": _contest_transparency_pack(
             enabled=True,
             backend="pytorch" if use_torch else "lightweight-linear",
-            blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+            blend_formula="dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty/drift/val_mae)",
             sample_count=(
                 int(meta.get("sample_count") or 0)
                 if use_torch
@@ -790,23 +930,80 @@ def apply_dl_scores(
             target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
         ),
     }
+    if llm_meta is not None:
+        out["llm_assist"] = llm_meta
+    if local_service_only:
+        out["edusignal_local_model"] = True
+        out["dl_score_lineage_ko"] = (
+            "DL 가중치는 로컬 team_ml_dataset·동일 스키마 라벨로만 학습·누적되며, "
+            "이 모드에서는 외부 벤치마크·연구 normative·웹 prior 점수 보정을 끕니다(EDUSIGNAL_LOCAL_MODEL=1)."
+        )
+    return out
 
 
-def run_anomaly_detector(users: list[TeamUserIn], scores: list[ScoreResult]) -> list[AnomalyResult]:
+def run_anomaly_detector(
+    users: list[TeamUserIn],
+    scores: list[ScoreResult],
+    *,
+    use_deep_learning: bool = True,
+) -> list[AnomalyResult]:
+    """규칙·입력 기반 이상 신호 + (옵션) DL·혼합 점수 기반 검사.
+
+    `use_deep_learning=True` 이고 멤버에 `dl_score`가 있으면 DL·혼합 관련 플래그를
+    앞쪽에 두어 검사 결과가 모델 신호 중심으로 읽히게 한다.
+    """
     team_mean = sum(s.rawScore for s in scores) / max(len(scores), 1)
     med_lines = _median([float(u.lines) for u in users])
+    blended_vals = [float(s.blendedScore) for s in scores if s.blendedScore is not None]
+    med_blended = _median(blended_vals) if len(blended_vals) >= 2 else None
+    min_blended = min(blended_vals) if blended_vals else None
+    dl_vals = [float(s.dl_score) for s in scores if s.dl_score is not None]
+    med_dl = _median(dl_vals) if len(dl_vals) >= 2 else None
+    min_dl = min(dl_vals) if dl_vals else None
     out: list[AnomalyResult] = []
     for u, s in zip(users, scores):
-        flags: list[str] = []
+        dl_front: list[str] = []
+        rule_mid: list[str] = []
+        blend_tail: list[str] = []
+
+        if use_deep_learning and s.dl_score is not None:
+            ds = float(s.dl_score)
+            ns = float(s.normalizedScore)
+            if s.dl_confidence is not None and float(s.dl_confidence) < 32.0:
+                dl_front.append("DL 모델 불확실도 큼(신뢰도 낮음): 입력·협업 근거 보강 권장")
+            if abs(ns - ds) >= 20.0:
+                dl_front.append("Rule 정규화 점수와 DL 보조 점수 차이 큼: 표면 지표 vs 학습 신호 교차 확인")
+            if med_dl is not None and len(dl_vals) >= 2:
+                if ds <= med_dl - 12.0:
+                    dl_front.append("DL 보조 점수 팀 대비 현저히 낮음(모델 관점)")
+                if min_dl is not None and ds <= min_dl + 1e-6:
+                    dl_front.append("DL 보조 점수 팀 내 최저(모델 관점)")
+                if ds >= med_dl + 12.0 and ns < 45.0:
+                    dl_front.append("Rule 점수는 낮은데 DL 보조는 상대적으로 높음: 히스토리·서술 신호 확인")
+
         wc = _word_count(u.selfReport)
         if u.commits == 0 and wc >= 35:
-            flags.append("커밋 0 + 자기서술 과다: 데이터 신뢰도 확인 필요")
+            rule_mid.append("커밋 0 + 자기서술 과다: 데이터 신뢰도 확인 필요")
         if u.lines > max(1.0, med_lines) * 2 and u.prs == 0:
-            flags.append("코드량 대비 PR 부족: 협업 점검 필요")
+            rule_mid.append("코드량 대비 PR 부족: 협업 점검 필요")
         if u.attendance < 40 and s.rawScore >= team_mean * 1.15 and team_mean > 1e-9:
-            flags.append("출석 낮음 대비 점수 높음: 이상 패턴 점검")
+            rule_mid.append("출석 낮음 대비 점수 높음: 이상 패턴 점검")
         if u.commits == 0 and u.prs == 0 and u.lines == 0 and wc < 5:
-            flags.append("평가 불가에 가까운 데이터 부족")
+            rule_mid.append("평가 불가에 가까운 데이터 부족")
+
+        if (
+            use_deep_learning
+            and med_blended is not None
+            and s.blendedScore is not None
+            and min_blended is not None
+        ):
+            fb = float(s.blendedScore)
+            if fb <= med_blended - 10.0:
+                blend_tail.append("혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)")
+            elif len(blended_vals) >= 2 and fb <= min_blended + 1e-6:
+                blend_tail.append("혼합(blended) 점수 팀 내 최저: 역할·기여 점검(모델·Rule 결합)")
+
+        flags = dl_front + blend_tail + rule_mid
         out.append(AnomalyResult(member_name=u.name.strip(), flags=flags))
     return out
 
@@ -1024,20 +1221,16 @@ def _openai_report_raw(payload: dict[str, Any], api_key: str) -> dict[str, Any] 
 
 
 def _gemini_report_raw(payload: dict[str, Any], api_key: str) -> dict[str, Any] | None:
-    import google.generativeai as genai
-
     model_name = (os.environ.get("TEAM_REPORT_GEMINI_MODEL") or os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-    ensure_gemini_configured(api_key)
-    model = genai.GenerativeModel(model_name=model_name, system_instruction=_REPORT_LLM_SYSTEM_KO)
-    res = model.generate_content(
+    text = gemini_generate_content(
+        api_key,
+        model_name,
         json.dumps(payload, ensure_ascii=False),
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.2,
-            "max_output_tokens": 4096,
-        },
+        system_instruction=_REPORT_LLM_SYSTEM_KO,
+        response_mime_type="application/json",
+        temperature=0.2,
+        max_output_tokens=4096,
     )
-    text = (getattr(res, "text", None) or "").strip()
     if not text:
         return None
     return _extract_json(text)
@@ -1182,13 +1375,40 @@ def run_ai_analyzer(
     return fb, "", meta
 
 
+def _dl_model_info_disabled_by_client() -> dict[str, Any]:
+    return {
+        "model_name": "disabled",
+        "enabled": False,
+        "reason": "client_disabled",
+        "note_ko": "요청에서 딥러닝·ML 보조를 끈 상태입니다. Rule 기반 점수만 사용합니다.",
+        "dl_roadmap": roadmap_payload(),
+        "contest_transparency": _contest_transparency_pack(
+            enabled=False,
+            backend="none",
+            blend_formula="disabled: normalizedScore only",
+            sample_count=None,
+            use_torch=False,
+            quality={"note_ko": "클라이언트가 DL 경로 비활성화"},
+            target_mix=f"{1.0 - STRUCTURAL_TARGET_WEIGHT:.2f}*normalizedScore + {STRUCTURAL_TARGET_WEIGHT}*structural_absolute",
+        ),
+    }
+
+
 @router.post("/report", response_model=TeamReportResponse)
 def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
     users = body.teamData
     req_id = str(uuid.uuid4())
     scores, trust = run_score_engine(users)
-    dl_model_info = apply_dl_scores(users, scores, request_id=req_id)
-    anomalies = run_anomaly_detector(users, scores)
+    if body.use_deep_learning:
+        dl_model_info = apply_dl_scores(
+            users,
+            scores,
+            request_id=req_id,
+            learning=body.deep_learning_accumulate_samples,
+        )
+    else:
+        dl_model_info = _dl_model_info_disabled_by_client()
+    anomalies = run_anomaly_detector(users, scores, use_deep_learning=body.use_deep_learning)
     analysis, team_narrative, ai_meta = run_ai_analyzer(
         users,
         scores,
@@ -1206,6 +1426,8 @@ def post_team_report(body: TeamReportRequest) -> TeamReportResponse:
         "request_id": req_id,
         "timestamp": ts,
         "project_name": body.project_name.strip(),
+        "use_deep_learning": body.use_deep_learning,
+        "deep_learning_accumulate_samples": body.deep_learning_accumulate_samples,
         "input_hash": input_hash,
         "input_data": input_data,
         "score": [s.model_dump() for s in scores],

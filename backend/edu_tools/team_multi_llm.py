@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
 
 from learning_analysis.llm_clients import (
-    ensure_gemini_configured,
+    gemini_generate_content,
     get_anthropic_client,
     get_openai_client,
     get_openai_xai_client,
@@ -166,19 +166,15 @@ def _default_model_label(provider: str) -> str:
 
 
 def _call_gemini(req: TeamEvaluateRequest, api_key: str) -> dict[str, Any] | None:
-    import google.generativeai as genai
-
     model_name = _default_model_label("gemini")
-    ensure_gemini_configured(api_key)
-    model = genai.GenerativeModel(model_name=model_name, system_instruction=TEAM_SYSTEM_KO)
-    res = model.generate_content(
+    text = gemini_generate_content(
+        api_key,
+        model_name,
         _user_payload(req),
-        generation_config={
-            "response_mime_type": "application/json",
-            "temperature": 0.25,
-        },
+        system_instruction=TEAM_SYSTEM_KO,
+        response_mime_type="application/json",
+        temperature=0.25,
     )
-    text = (res.text or "").strip()
     return _parse_json(text)
 
 

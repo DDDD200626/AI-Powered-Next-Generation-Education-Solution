@@ -6,13 +6,14 @@ import json
 import math
 import os
 import random
+import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from edu_tools.dl_roadmap import ROADMAP_VERSION, build_dl_quality_unified
-from edu_tools.team_lm_embedding import semantic_encoder_meta
+from edu_tools.team_lm_embedding import LM_EXTRA_DIM, is_semantic_enabled, semantic_encoder_meta
 from edu_tools.team_ml_model import (
     DATASET_PATH,
     FEATURE_DIM,
@@ -36,7 +37,8 @@ DATA_DIR = Path(__file__).with_name("data")
 TORCH_MODEL_PATH = DATA_DIR / "team_torch_model.pt"
 TORCH_META_PATH = DATA_DIR / "team_torch_model.meta.json"
 
-# 기본: 경량. TEAM_TORCH_MODEL_SIZE=large → 깊은 대형 MLP + 앙상블 확대 (로컬/CPU 탑재용)
+# EduSignal(stock-predict): TEAM_TORCH_MODEL_SIZE 미설정 시 기본 xxl(극대형). pytest/CI는 tests/conftest·워크플로에서 standard.
+# TEAM_TORCH_MODEL_SIZE=large|xlarge|xlarge_lite|xxl|standard 로 덮어쓰기 가능.
 STANDARD_ENSEMBLE_SIZE = 4
 STANDARD_CV_FOLDS = 5
 STANDARD_MC_DROPOUT = 14
@@ -233,9 +235,28 @@ def invalidate_torch_predict_cache() -> None:
     _TORCH_PREDICT_CACHE = None
 
 
+def _contest_max_quality() -> bool:
+    """심사·최종 제출용: 최대 용량 프로파일·확장 그리드·앙상블/MC 상향.
+
+    TEAM_TORCH_CONTEST_MAX=1 일 때 켜짐(학습 시간·메모리 크게 증가).
+    """
+    return (os.environ.get("TEAM_TORCH_CONTEST_MAX", "0") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _early_stop_patience(n_samples: int) -> int:
     """표본 수에 맞춘 조기 종료 인내 — 너무 짧으면 과소적합, 너무 길면 CV 비용만 증가."""
-    return max(28, min(52, 18 + n_samples // 4))
+    base = max(28, min(52, 18 + n_samples // 4))
+    if _contest_max_quality():
+        return max(40, min(72, base + 14))
+    # 문장 임베딩 사용 시 학습 경로가 더 노이즈에 민감해질 수 있어 인내 소폭 증가
+    if is_semantic_enabled():
+        base = min(56, base + 4)
+    return base
 
 
 def _resolve_torch_seed() -> int:
@@ -244,6 +265,16 @@ def _resolve_torch_seed() -> int:
         return int((os.environ.get("TEAM_TORCH_SEED", "42") or "42").strip())
     except Exception:
         return 42
+
+
+def _label_smooth_beta() -> float:
+    """회귀 라벨을 배치 평균 쪽으로 살짝 당겨 과적합·스파이크 완화(검증·보정은 원 라벨 유지)."""
+    raw = (os.environ.get("TEAM_TORCH_LABEL_SMOOTH") or "0.06").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        v = 0.06
+    return max(0.0, min(0.2, v))
 
 
 def _row_group_ids(sess_ids: list[str]) -> list[int]:
@@ -346,26 +377,72 @@ def _rolling_time_fold_indices(n: int, fold_count: int) -> list[tuple[list[int],
 
 
 def _model_size_profile() -> str:
-    raw = (os.environ.get("TEAM_TORCH_MODEL_SIZE") or "standard").strip().lower()
-    if raw in ("xxl", "2xl", "giant", "max", "ultra"):
+    """심사 최대(CONTEST_MAX) → xxl. 명시 TEAM_TORCH_MODEL_SIZE → 그 값. 없으면 이 저장소 기본 xxl(테스트·CI는 standard)."""
+    if _contest_max_quality():
         return "xxl"
-    if raw in ("xlarge_lite", "xlarge-lite", "xlarge_fast", "xlarge-cpu", "xlarge_cpu", "xlcpu"):
-        return "xlarge_lite"
-    if raw == "xlarge":
-        return "xlarge"
-    if raw in ("large", "xl", "huge", "big"):
-        return "large"
-    return "standard"
+    raw_in = os.environ.get("TEAM_TORCH_MODEL_SIZE")
+    if raw_in is not None and str(raw_in).strip() != "":
+        raw = str(raw_in).strip().lower()
+        if raw in ("xxl", "2xl", "giant", "max", "ultra"):
+            return "xxl"
+        if raw in ("xlarge_lite", "xlarge-lite", "xlarge_fast", "xlarge-cpu", "xlarge_cpu", "xlcpu"):
+            return "xlarge_lite"
+        if raw == "xlarge":
+            return "xlarge"
+        if raw in ("large", "xl", "huge", "big"):
+            return "large"
+        return "standard"
+    # 프로젝트 전용 기본: 로컬·실행 서버는 초대형. 자동 테스트는 conftest에서 TEAM_TORCH_MODEL_SIZE 고정.
+    if (os.environ.get("CI") or "").strip().lower() in ("true", "1", "yes"):
+        return "standard"
+    if "pytest" in sys.modules:
+        return "standard"
+    return "xxl"
+
+
+def _torch_retrain_interval() -> int:
+    """PyTorch 재학습: 새 샘플 누적 간격. xxl 기본은 더 촘촘히(TEAM_TORCH_RETRAIN_INTERVAL로 덮어쓰기)."""
+    raw = (os.environ.get("TEAM_TORCH_RETRAIN_INTERVAL") or "").strip()
+    if raw:
+        try:
+            return max(3, int(raw))
+        except ValueError:
+            pass
+    prof = _model_size_profile()
+    if prof == "xxl":
+        return max(5, min(int(RETRAIN_INTERVAL), 10))
+    if prof == "xlarge":
+        return max(5, min(int(RETRAIN_INTERVAL), 14))
+    if prof == "xlarge_lite":
+        return max(6, min(int(RETRAIN_INTERVAL), 16))
+    return max(3, int(RETRAIN_INTERVAL))
+
+
+def _torch_drift_retrain_threshold() -> float:
+    """드리프트 점수가 이 값 미만이면 간격 미달이어도 재학습 후보(TEAM_TORCH_RETRAIN_DRIFT_MIN으로 덮어쓰기)."""
+    raw = (os.environ.get("TEAM_TORCH_RETRAIN_DRIFT_MIN") or "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    prof = _model_size_profile()
+    if prof == "xxl":
+        return 50.0
+    if prof in ("xlarge", "xlarge_lite"):
+        return 54.0
+    return 58.0
 
 
 def _maybe_extend_hparam_grid(grid: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """TEAM_TORCH_EXTENDED_HP=1 이면 그리드에 변형 후보를 추가해 탐색 시간·범위 확대."""
-    if (os.environ.get("TEAM_TORCH_EXTENDED_HP", "0") or "0").strip().lower() not in (
+    """TEAM_TORCH_EXTENDED_HP=1 또는 CONTEST_MAX 이면 그리드에 변형 후보 추가."""
+    ext = (os.environ.get("TEAM_TORCH_EXTENDED_HP", "0") or "0").strip().lower() in (
         "1",
         "true",
         "yes",
         "on",
-    ):
+    ) or _contest_max_quality()
+    if not ext:
         return grid
     extra: list[dict[str, Any]] = []
     for h in grid[: min(4, len(grid))]:
@@ -388,9 +465,10 @@ def _maybe_extend_hparam_grid(grid: list[dict[str, Any]]) -> list[dict[str, Any]
 
 def _training_profile() -> dict[str, Any]:
     """standard | large | xlarge | xlarge_lite | xxl — 학습·추론 하이퍼파라미터 묶음."""
+    contest = _contest_max_quality()
     prof = _model_size_profile()
     if prof == "xxl":
-        return {
+        tp = {
             "name": "xxl",
             "ensemble_size": int(os.environ.get("TEAM_TORCH_ENSEMBLE", "11") or 11),
             "cv_folds": min(5, max(3, int(os.environ.get("TEAM_TORCH_CV_FOLDS", "5") or 5))),
@@ -398,6 +476,22 @@ def _training_profile() -> dict[str, Any]:
             "hparam_grid": _maybe_extend_hparam_grid(HYPERPARAM_CANDIDATES_XXL),
             "arch_grid": ARCH_CANDIDATES_LARGE,
         }
+        if contest:
+            tp["ensemble_size"] = max(int(tp["ensemble_size"]), 14)
+            tp["mc_dropout"] = max(int(tp["mc_dropout"]), 36)
+            tp["cv_folds"] = max(int(tp["cv_folds"]), 5)
+            # 심사용: 변형 그리드 한 번 더 넓힘(시간↑)
+            hg = list(tp["hparam_grid"])
+            for h in hg[: min(3, len(hg))]:
+                hg.append(
+                    {
+                        **h,
+                        "epochs": int(int(h["epochs"]) * 1.08),
+                        "lr": float(h["lr"]) * 0.92,
+                    }
+                )
+            tp["hparam_grid"] = hg
+        return tp
     if prof == "xlarge_lite":
         return {
             "name": "xlarge_lite",
@@ -801,6 +895,105 @@ def _resolve_input_noise_std_training() -> float:
     return max(0.0, min(0.5, v))
 
 
+def _semantic_anti_overfit_enabled() -> bool:
+    return (os.environ.get("TEAM_SEMANTIC_ANTI_OVERFIT", "0") or "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _semantic_auto_reg_enabled() -> bool:
+    """TEAM_SEMANTIC_ENCODER=1 일 때 기본으로 완화(드롭아웃·스케일) 켜기. 끄려면 TEAM_SEMANTIC_AUTO_REG=0."""
+    return (os.environ.get("TEAM_SEMANTIC_AUTO_REG", "1") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _semantic_train_dropout_p() -> float:
+    """학습 시에만: 임베딩 구간 전체를 0으로 만드는 블록 드롭아웃 확률."""
+    raw = (os.environ.get("TEAM_SEMANTIC_TRAIN_DROPOUT", "") or "").strip()
+    if raw:
+        try:
+            return max(0.0, min(1.0, float(raw)))
+        except ValueError:
+            return 0.0
+    if _semantic_anti_overfit_enabled():
+        return 0.18
+    if is_semantic_enabled() and _semantic_auto_reg_enabled():
+        return 0.15
+    return 0.0
+
+
+def _semantic_train_scale() -> float:
+    """학습 시에만: 임베딩 구간 선형 스케일(1 미만이면 의미 경로 기여 완화)."""
+    raw = (os.environ.get("TEAM_SEMANTIC_TRAIN_SCALE", "") or "").strip()
+    if raw:
+        try:
+            return max(0.3, min(1.0, float(raw)))
+        except ValueError:
+            return 1.0
+    if _semantic_anti_overfit_enabled():
+        return 0.92
+    if is_semantic_enabled() and _semantic_auto_reg_enabled():
+        return 0.94
+    return 1.0
+
+
+def _semantic_feature_slice() -> slice:
+    b = max(0, int(FEATURE_DIM) - int(LM_EXTRA_DIM))
+    return slice(b, int(FEATURE_DIM))
+
+
+def _augment_training_features(x: Any) -> Any:
+    """학습 순전파에만 적용: 입력 노이즈 + 자기서술 임베딩 차원(끝 8개) 규제.
+
+    추론(`predict_torch_*`)은 원본 정규화 피처를 그대로 사용한다.
+    """
+    import torch
+
+    noise_std = _resolve_input_noise_std_training()
+    scale = _semantic_train_scale()
+    p_drop = _semantic_train_dropout_p()
+    sl = _semantic_feature_slice()
+    need_sem = scale < 0.999 or p_drop > 0.0
+    if noise_std <= 0 and not need_sem:
+        return x
+    if noise_std > 0:
+        out = x + torch.randn_like(x) * noise_std
+    else:
+        out = x.clone()
+    if scale < 0.999:
+        out = out.clone()
+        out[:, sl] = out[:, sl] * float(scale)
+    if p_drop > 0.0 and torch.rand(1, device=out.device, dtype=out.dtype).item() < p_drop:
+        out = out.clone()
+        out[:, sl] = 0.0
+    return out
+
+
+def _semantic_train_reg_meta(noise_std: float) -> dict[str, Any]:
+    return {
+        "feature_slice": f"[{FEATURE_DIM - LM_EXTRA_DIM}:{FEATURE_DIM}]",
+        "dropout_block_p": round(_semantic_train_dropout_p(), 4),
+        "scale_on_embedding_dims": round(_semantic_train_scale(), 4),
+        "anti_overfit_preset": _semantic_anti_overfit_enabled(),
+        "auto_reg_default": bool(is_semantic_enabled() and _semantic_auto_reg_enabled()),
+        "semantic_encoder_enabled": bool(is_semantic_enabled()),
+        "input_noise_std_training": round(float(noise_std), 6),
+        "note_ko": (
+            "학습 시에만 임베딩 구간에 블록 드롭아웃·스케일을 적용해 서술 의미에 과적합하기 어렵게 합니다. "
+            "TEAM_SEMANTIC_ENCODER=1 이고 TEAM_SEMANTIC_AUTO_REG=1(기본)이면 완화가 자동 적용됩니다. "
+            "TEAM_SEMANTIC_ANTI_OVERFIT=1 이면 더 강한 권장값이며, "
+            "TEAM_SEMANTIC_TRAIN_DROPOUT / TEAM_SEMANTIC_TRAIN_SCALE 로 수치를 직접 덮어쓸 수 있습니다."
+        ),
+    }
+
+
 def _permutation_importance_top_k(
     nn_module: Any,
     state_dict: dict[str, Any],
@@ -870,17 +1063,21 @@ def train_torch_if_needed() -> dict[str, Any]:
     n = len(data_eff)
     sess_ids = [str(r.get("sess") or "") for r in data_eff]
     tp = _training_profile()
+    contest_now = _contest_max_quality()
+    contest_was = bool(meta.get("contest_max_quality_preset"))
     saved_prof = str(meta.get("model_size_profile") or "standard")
     incompat = (
         int(meta.get("feature_version", 0) or 0) != FEATURE_VERSION
         or int(meta.get("input_dim", 0) or 0) != FEATURE_DIM
         or saved_prof != tp["name"]
+        or contest_now != contest_was
     )
     if n_pool < MIN_TRAIN_SAMPLES or n < MIN_TRAIN_SAMPLES:
         return {"enabled": True, "trained": False, "sample_count": n_pool, "reason": "insufficient_samples"}
+    interval_need = _torch_retrain_interval()
     if (
         TORCH_MODEL_PATH.exists()
-        and (n_pool - trained_count) < RETRAIN_INTERVAL
+        and (n_pool - trained_count) < interval_need
         and not incompat
         and not retrain_forced_by_env()
     ):
@@ -889,7 +1086,7 @@ def train_torch_if_needed() -> dict[str, Any]:
             meta.get("training_feature_means"),
             meta.get("training_feature_stds"),
         )
-        drift_min = float(os.environ.get("TEAM_TORCH_RETRAIN_DRIFT_MIN", "58") or 58.0)
+        drift_min = _torch_drift_retrain_threshold()
         if drift_score is not None and drift_score < drift_min:
             # 분포가 학습 시점과 크게 달라졌으면 간격 미도달이어도 재학습한다.
             pass
@@ -916,6 +1113,7 @@ def train_torch_if_needed() -> dict[str, Any]:
         "yes",
         "on",
     )
+    beta_ls = _label_smooth_beta()
 
     x_all = torch.tensor(
         [pad_feature_vector([float(v) for v in r["x"]]) for r in data_eff], dtype=torch.float32
@@ -972,8 +1170,13 @@ def train_torch_if_needed() -> dict[str, Any]:
                 model.train()
                 for _ in range(int(h["epochs"])):
                     opt.zero_grad()
-                    pred = model(x_tr)
-                    loss = loss_fn(pred, y_tr)
+                    pred = model(_augment_training_features(x_tr))
+                    y_fit = (
+                        (1.0 - beta_ls) * y_tr + beta_ls * y_tr.mean(dim=0, keepdim=True)
+                        if beta_ls > 0
+                        else y_tr
+                    )
+                    loss = loss_fn(pred, y_fit)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     opt.step()
@@ -1032,11 +1235,13 @@ def train_torch_if_needed() -> dict[str, Any]:
         model.train()
         for _ in range(int(best_h["epochs"])):
             opt.zero_grad()
-            x_in = x_tr
-            if input_noise_std > 0:
-                x_in = x_tr + torch.randn_like(x_tr) * input_noise_std
-            pred = model(x_in)
-            loss = loss_fn(pred, y_tr)
+            pred = model(_augment_training_features(x_tr))
+            y_fit = (
+                (1.0 - beta_ls) * y_tr + beta_ls * y_tr.mean(dim=0, keepdim=True)
+                if beta_ls > 0
+                else y_tr
+            )
+            loss = loss_fn(pred, y_fit)
             # 세션(동일 요청) 내 순위 보조 손실 — 룰 순위와 독립적인 학습 신호
             gp: dict[str, list[int]] = defaultdict(list)
             for pos, row_i in enumerate(bs_idx):
@@ -1239,6 +1444,13 @@ def train_torch_if_needed() -> dict[str, Any]:
         "dataset_path": str(DATASET_PATH),
         "ensemble_size": int(tp["ensemble_size"]),
         "model_size_profile": tp["name"],
+        "project_torch_preset": (
+            "edusignal_repo_default_xxl"
+            if not (os.environ.get("TEAM_TORCH_MODEL_SIZE") or "").strip() and not _contest_max_quality()
+            else ("contest_max_quality" if _contest_max_quality() else "team_torch_model_size_env")
+        ),
+        "edusignal_local_model": (os.environ.get("EDUSIGNAL_LOCAL_MODEL") or "").strip().lower()
+        in ("1", "true", "yes", "on"),
         "approx_parameters": approx_params,
         "mc_dropout_samples": int(tp["mc_dropout"]),
         "torch_seed": run_seed,
@@ -1287,6 +1499,7 @@ def train_torch_if_needed() -> dict[str, Any]:
         "holdout_time_r2": holdout_time_r2,
         "holdout_time_note_ko": holdout_time_note_ko,
         "input_noise_std_training": round(float(input_noise_std), 6),
+        "semantic_train_regularization": _semantic_train_reg_meta(input_noise_std),
         "permutation_importance_top": perm_top,
         "semantic_encoder": semantic_encoder_meta(),
         "training_pool_resolve": last_training_resolve_meta(),
@@ -1294,7 +1507,18 @@ def train_torch_if_needed() -> dict[str, Any]:
             "weights": [round(float(w), 6) for w in ensemble_member_weights],
             "strategy": "inverse_validation_mae",
         },
+        "contest_max_quality_preset": contest_now,
+        "rubric_submission_note_ko": (
+            "TEAM_TORCH_CONTEST_MAX=1: xxl 고정, 앙상블≥14·MC≥36·CV5, 확장 하이퍼그리드·조기종료 인내 확대(학습 비용↑)."
+            if contest_now
+            else None
+        ),
     }
+    if out_meta.get("edusignal_local_model"):
+        out_meta["training_lineage_ko"] = (
+            "가중치는 backend/edu_tools/data/team_ml_dataset.jsonl 에 쌓인 표본만으로 학습됩니다. "
+            "EDUSIGNAL_LOCAL_MODEL=1 인 동안 추론 단계의 외부 벤치마크·연구 normative·웹 prior 점수 보정은 끕니다."
+        )
     out_meta["dl_quality_unified"] = build_dl_quality_unified(out_meta)
     promote_ok, promote_reasons = _promotion_gate_decision(meta, out_meta)
     out_meta["promotion_gate"] = {
@@ -1315,6 +1539,13 @@ def train_torch_if_needed() -> dict[str, Any]:
     torch.save(state, TORCH_MODEL_PATH)
     _save_meta(out_meta)
     invalidate_torch_predict_cache()
+    if (os.environ.get("TEAM_DATA_BACKUP_ON_TRAIN") or "").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            from edu_tools.team_training_backup import backup_team_training_artifacts
+
+            backup_team_training_artifacts(reason="post_torch_train")
+        except Exception:
+            pass
     return {"enabled": True, "trained": True, **out_meta}
 
 

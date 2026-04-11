@@ -1,0 +1,1759 @@
+{
+  "scores": [
+    {
+      "member_name": "김민지",
+      "rawScore": 78.03,
+      "normalizedScore": 100.0,
+      "rank": 1,
+      "top_percent": 25.0,
+      "breakdown": {
+        "commits": 78.13953488372093,
+        "prs": 80.0,
+        "lines": 85.61872909698997,
+        "attendance": 95.0,
+        "self_report": 55.65217391304348
+      },
+      "weighted_points": {
+        "commits": 19.53,
+        "prs": 16.0,
+        "lines": 17.12,
+        "attendance": 14.25,
+        "self_report": 11.13
+      },
+      "pct_vs_team_mean": 59.8,
+      "data_reliability": {
+        "score_0_100": 77.6,
+        "git_ratio_percent": 80.0,
+        "self_report_ratio_percent": 20.0,
+        "note": ""
+      },
+      "dl_score": 100.0,
+      "dl_confidence": 80.0,
+      "blendedScore": 100.0,
+      "dl_top_factors": [
+        "코드 변화량 +",
+        "커밋 활동 +",
+        "자기서술 밀도 +"
+      ],
+      "external_benchmark_score": null,
+      "llm_alignment_score": null,
+      "research_alignment_score": null
+    },
+    {
+      "member_name": "이준호",
+      "rawScore": 55.81,
+      "normalizedScore": 60.11,
+      "rank": 2,
+      "top_percent": 50.0,
+      "breakdown": {
+        "commits": 52.093023255813954,
+        "prs": 50.0,
+        "lines": 56.187290969899664,
+        "attendance": 88.0,
+        "self_report": 41.73913043478261
+      },
+      "weighted_points": {
+        "commits": 13.02,
+        "prs": 10.0,
+        "lines": 11.24,
+        "attendance": 13.2,
+        "self_report": 8.35
+      },
+      "pct_vs_team_mean": 14.3,
+      "data_reliability": {
+        "score_0_100": 85.9,
+        "git_ratio_percent": 80.0,
+        "self_report_ratio_percent": 20.0,
+        "note": ""
+      },
+      "dl_score": 72.28,
+      "dl_confidence": 81.2,
+      "blendedScore": 65.5,
+      "dl_top_factors": [
+        "코드 변화량 +",
+        "커밋 활동 +",
+        "자기서술 밀도 +"
+      ],
+      "external_benchmark_score": null,
+      "llm_alignment_score": null,
+      "research_alignment_score": null
+    },
+    {
+      "member_name": "박서연",
+      "rawScore": 39.19,
+      "normalizedScore": 30.28,
+      "rank": 3,
+      "top_percent": 75.0,
+      "breakdown": {
+        "commits": 27.906976744186046,
+        "prs": 30.0,
+        "lines": 23.812709030100336,
+        "attendance": 92.0,
+        "self_report": 38.26086956521739
+      },
+      "weighted_points": {
+        "commits": 6.98,
+        "prs": 6.0,
+        "lines": 4.76,
+        "attendance": 13.8,
+        "self_report": 7.65
+      },
+      "pct_vs_team_mean": -19.8,
+      "data_reliability": {
+        "score_0_100": 99.1,
+        "git_ratio_percent": 80.0,
+        "self_report_ratio_percent": 20.0,
+        "note": ""
+      },
+      "dl_score": 45.61,
+      "dl_confidence": 85.7,
+      "blendedScore": 37.2,
+      "dl_top_factors": [
+        "코드 변화량 +",
+        "커밋 활동 +",
+        "자기서술 밀도 +"
+      ],
+      "external_benchmark_score": null,
+      "llm_alignment_score": null,
+      "research_alignment_score": null
+    },
+    {
+      "member_name": "최도윤",
+      "rawScore": 22.32,
+      "normalizedScore": 0.0,
+      "rank": 4,
+      "top_percent": 100.0,
+      "breakdown": {
+        "commits": 14.88372093023256,
+        "prs": 10.0,
+        "lines": 5.886287625418061,
+        "attendance": 75.0,
+        "self_report": 20.869565217391305
+      },
+      "weighted_points": {
+        "commits": 3.72,
+        "prs": 2.0,
+        "lines": 1.18,
+        "attendance": 11.25,
+        "self_report": 4.17
+      },
+      "pct_vs_team_mean": -54.3,
+      "data_reliability": {
+        "score_0_100": 98.5,
+        "git_ratio_percent": 80.0,
+        "self_report_ratio_percent": 20.0,
+        "note": ""
+      },
+      "dl_score": 31.11,
+      "dl_confidence": 97.2,
+      "blendedScore": 14.76,
+      "dl_top_factors": [
+        "코드 변화량 +",
+        "rel_log_lines -",
+        "커밋 활동 +"
+      ],
+      "external_benchmark_score": null,
+      "llm_alignment_score": null,
+      "research_alignment_score": null
+    }
+  ],
+  "anomalies": [
+    {
+      "member_name": "김민지",
+      "flags": []
+    },
+    {
+      "member_name": "이준호",
+      "flags": []
+    },
+    {
+      "member_name": "박서연",
+      "flags": [
+        "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+        "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+      ]
+    },
+    {
+      "member_name": "최도윤",
+      "flags": [
+        "Rule 정규화 점수와 DL 보조 점수 차이 큼: 표면 지표 vs 학습 신호 교차 확인",
+        "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+        "DL 보조 점수 팀 내 최저(모델 관점)",
+        "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+      ]
+    }
+  ],
+  "analysis": [
+    {
+      "member_name": "김민지",
+      "summary": "김민지의 기여도는 100/100, 팀 평균 대비 +59.8%입니다.",
+      "strengths": [
+        "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+      ],
+      "weaknesses": [
+        "특이 이상 없음"
+      ],
+      "position_in_team": "팀 4명 중 1위 (상위 25.0%).",
+      "recommended_actions": [
+        "PR 리뷰 참여를 주차 목표에 포함하세요."
+      ],
+      "metric_dl_note": ""
+    },
+    {
+      "member_name": "이준호",
+      "summary": "이준호의 기여도는 60/100, 팀 평균 대비 +14.3%입니다.",
+      "strengths": [
+        "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+      ],
+      "weaknesses": [
+        "특이 이상 없음"
+      ],
+      "position_in_team": "팀 4명 중 2위 (상위 50.0%).",
+      "recommended_actions": [
+        "PR 리뷰 참여를 주차 목표에 포함하세요."
+      ],
+      "metric_dl_note": ""
+    },
+    {
+      "member_name": "박서연",
+      "summary": "박서연의 기여도는 30/100, 팀 평균 대비 -19.8%입니다.",
+      "strengths": [
+        "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+      ],
+      "weaknesses": [
+        "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+        "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+      ],
+      "position_in_team": "팀 4명 중 3위 (상위 75.0%).",
+      "recommended_actions": [
+        "PR 리뷰 참여를 주차 목표에 포함하세요."
+      ],
+      "metric_dl_note": ""
+    },
+    {
+      "member_name": "최도윤",
+      "summary": "최도윤의 기여도는 0/100, 팀 평균 대비 -54.3%입니다.",
+      "strengths": [
+        "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+      ],
+      "weaknesses": [
+        "Rule 정규화 점수와 DL 보조 점수 차이 큼: 표면 지표 vs 학습 신호 교차 확인",
+        "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+        "DL 보조 점수 팀 내 최저(모델 관점)"
+      ],
+      "position_in_team": "팀 4명 중 4위 (상위 100.0%).",
+      "recommended_actions": [
+        "PR 리뷰 참여를 주차 목표에 포함하세요."
+      ],
+      "metric_dl_note": ""
+    }
+  ],
+  "edge_cases": [],
+  "trust_scores": {
+    "김민지": 77.6,
+    "이준호": 85.9,
+    "박서연": 99.1,
+    "최도윤": 98.5
+  },
+  "dl_model_info": {
+    "model_name": "team-torch-mlp",
+    "enabled": true,
+    "model_version": "team-torch-20260409174732",
+    "trained_at": "2026-04-09T17:47:32.361618+00:00",
+    "sample_count": 334,
+    "auto_retrain": false,
+    "backend": "pytorch",
+    "quality": {
+      "validation_mae_mean": 2.6695,
+      "cv_mae_mean": 4.1676,
+      "ensemble_size": 10,
+      "best_hparams": {
+        "hidden1": 768,
+        "hidden2": 384,
+        "hidden3": 192,
+        "hidden4": 96,
+        "dropout": 0.17,
+        "lr": 0.0019,
+        "weight_decay": 0.000128,
+        "epochs": 740,
+        "name": "silu",
+        "activation": "silu",
+        "use_residual_mlp": false
+      },
+      "best_architecture": "silu",
+      "calibration": {
+        "a": 0.9686,
+        "b": 2.2387
+      },
+      "calibration_pearson_r": 0.9871,
+      "calibration_r2": 0.9732,
+      "holdout_time_mae": null,
+      "holdout_time_pearson_r": null,
+      "holdout_time_r2": null,
+      "label_spec_version": 1,
+      "feature_version": 6,
+      "input_dim": 34,
+      "cv_vs_validation_gap": 1.4981,
+      "chronological_tail_mae_mean": 0.313,
+      "model_size_profile": "xlarge",
+      "approx_parameters": 414721,
+      "mc_dropout_samples": 28,
+      "gbdt_present": true,
+      "nn_gbdt_blend_alpha": 0.45,
+      "gbdt_validation_blend_mae": 1.9884,
+      "cv_split_strategy": "rolling_time",
+      "cv_unique_groups": 215,
+      "dataset_file_sha256": "1f210976a9623983d63b8ae1d3d393244341b654512180b90b8bc9ed954b616d",
+      "gbdt_top_features": null,
+      "dl_roadmap_version": 5,
+      "dl_quality_unified": {
+        "schema": "dl_quality_unified_v4",
+        "cv": {
+          "split_strategy": "rolling_time",
+          "unique_groups": 215,
+          "mae_mean": 4.1676,
+          "vs_validation_gap": 1.4981
+        },
+        "validation_mae_mean": 2.6695,
+        "chronological_tail": {
+          "mae_mean": 0.313,
+          "fraction": 0.1198,
+          "note": "동일 데이터로 학습된 모델의 시간순 꼬리 구간 MAE; 드리프트·포화 감지용(순수 홀드아웃 아님)."
+        },
+        "nn_gbdt_blend": {
+          "gbdt_present": true,
+          "nn_gbdt_blend_alpha": 0.45,
+          "gbdt_validation_blend_mae": 1.9884
+        },
+        "calibration_linear": {
+          "a": 0.9686,
+          "b": 2.2387
+        },
+        "fit_metrics": {
+          "calibration_pearson_r": 0.9871,
+          "calibration_r2": 0.9732,
+          "note_ko": "검증에 쓰인 예측(선형 보정 전)·라벨의 피어슨·R². 학습 데이터 위에서 측정되어 낙관될 수 있음."
+        },
+        "holdout_time": {
+          "active": false,
+          "split": {
+            "active": false,
+            "reason": "frac_zero"
+          },
+          "mae": null,
+          "pearson_r": null,
+          "r2": null,
+          "note_ko": null
+        },
+        "data_pipeline": {
+          "outlier_filter": {
+            "enabled": false,
+            "skipped": 0
+          },
+          "effective_training_rows": 334,
+          "label_spec_version": 1
+        },
+        "explainability": {
+          "permutation_importance_top": [
+            {
+              "feature": "rank_in_team",
+              "delta_mae": 8.367509
+            },
+            {
+              "feature": "log_prs",
+              "delta_mae": 6.267917
+            },
+            {
+              "feature": "team_size_norm",
+              "delta_mae": 2.684258
+            },
+            {
+              "feature": "rel_log_lines",
+              "delta_mae": 2.222362
+            },
+            {
+              "feature": "log_lines",
+              "delta_mae": 1.988712
+            },
+            {
+              "feature": "log_commits",
+              "delta_mae": 1.798694
+            },
+            {
+              "feature": "rel_log_commits",
+              "delta_mae": 1.543541
+            },
+            {
+              "feature": "activity_density",
+              "delta_mae": 1.52678
+            },
+            {
+              "feature": "text_unique_ratio",
+              "delta_mae": 1.494533
+            },
+            {
+              "feature": "attendance_norm",
+              "delta_mae": 1.141014
+            }
+          ],
+          "input_noise_std_training": 0.0,
+          "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+        },
+        "dl_roadmap_version": 5
+      },
+      "promotion_gate": {
+        "accepted": true,
+        "reasons": [
+          "metrics_ok"
+        ]
+      },
+      "feature_drift": {
+        "drift_score_0_100": 93.09,
+        "drift_level": "low",
+        "mean_abs_z_shift": 0.3143
+      },
+      "explainability_snapshot": {
+        "permutation_importance_top": [
+          {
+            "feature": "rank_in_team",
+            "delta_mae": 8.367509
+          },
+          {
+            "feature": "log_prs",
+            "delta_mae": 6.267917
+          },
+          {
+            "feature": "team_size_norm",
+            "delta_mae": 2.684258
+          },
+          {
+            "feature": "rel_log_lines",
+            "delta_mae": 2.222362
+          },
+          {
+            "feature": "log_lines",
+            "delta_mae": 1.988712
+          },
+          {
+            "feature": "log_commits",
+            "delta_mae": 1.798694
+          },
+          {
+            "feature": "rel_log_commits",
+            "delta_mae": 1.543541
+          },
+          {
+            "feature": "activity_density",
+            "delta_mae": 1.52678
+          },
+          {
+            "feature": "text_unique_ratio",
+            "delta_mae": 1.494533
+          },
+          {
+            "feature": "attendance_norm",
+            "delta_mae": 1.141014
+          }
+        ],
+        "input_noise_std_training": 0.0,
+        "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+      },
+      "operations_playbook": {
+        "recommendation_level": "ok",
+        "summary_ko": "배치 피처 분포와 학습 메타가 대체로 일치하며, 별도 조치 없이 참고·모니터링 수준입니다.",
+        "checklist_ko": [
+          "치환 중요도 상위 피처는 품질 메타·아래 설명 패널 참고"
+        ],
+        "indicators": {
+          "drift": {
+            "drift_score_0_100": 93.09,
+            "drift_level": "low",
+            "mean_abs_z_shift": 0.3143
+          },
+          "promotion_gate": {
+            "accepted": true,
+            "reasons": [
+              "metrics_ok"
+            ]
+          },
+          "sample_count": 334,
+          "pytorch_active": true,
+          "last_train_in_request": {
+            "trained": false,
+            "reason": null
+          }
+        }
+      },
+      "semantic_encoder": {
+        "enabled": false,
+        "model_id": null,
+        "approx_parameters_note": "인코더는 sentence-transformers 카탈로그 기준(다국어 MiniLM 계열 약 1e8 파라미터급).",
+        "extra_dims": 8,
+        "note_ko": "TEAM_SEMANTIC_ENCODER=1일 때 자기서술을 문장 임베딩으로 인코딩한 뒤 8개 구간 평균+tanh로 압축합니다. 0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다. 학습 시 과적합 완화는 team_torch_model 의 semantic_train_regularization·TEAM_SEMANTIC_AUTO_REG 를 참고하세요."
+      }
+    },
+    "web_priors": {
+      "enabled": false,
+      "source": "local-default",
+      "prior_adjustment": {
+        "prior_strength": 1.0,
+        "gap_weights": {
+          "commit": 5.0,
+          "pr": 4.0,
+          "lines": 0.0,
+          "attendance": 3.0,
+          "self_report": 0.0
+        },
+        "max_delta": 12.0,
+        "source_title": null,
+        "methodology_note_ko": null,
+        "cohort": null,
+        "valid_until": null,
+        "env_strength_multiplier": 1.0
+      },
+      "benchmark_inference": {
+        "enabled": false,
+        "blend_weight": 0.3,
+        "note_ko": ""
+      }
+    },
+    "benchmark_inference": {
+      "enabled": false,
+      "blend_weight": 0.3,
+      "note_ko": ""
+    },
+    "prior_calibration": {
+      "adjustment": {
+        "prior_strength": 1.0,
+        "gap_weights": {
+          "commit": 5.0,
+          "pr": 4.0,
+          "lines": 0.0,
+          "attendance": 3.0,
+          "self_report": 0.0
+        },
+        "max_delta": 12.0,
+        "source_title": null,
+        "methodology_note_ko": null,
+        "cohort": null,
+        "valid_until": null,
+        "env_strength_multiplier": 1.0
+      },
+      "delta_stats": {
+        "min": -0.4,
+        "max": 4.347,
+        "mean": 2.346,
+        "abs_max": 4.347
+      },
+      "note_ko": "공개 벤치마크·기관 통계에서 정의한 기대값(priors)과 입력 피처의 차이로 DL 보조 점수를 가중·상한이 있는 범위에서만 보정합니다. 외부 자료는 학습 라벨이 아니라 교정(calibration) 용도입니다."
+    },
+    "research_evidence": {
+      "active": false,
+      "source": null,
+      "reason": "no_file",
+      "path": null
+    },
+    "input_features": [
+      "log_commits",
+      "log_prs",
+      "log_lines",
+      "attendance_norm",
+      "log_self_report_words",
+      "log_report_chars",
+      "pr_vs_commit",
+      "lines_per_pr",
+      "activity_density",
+      "rel_log_commits",
+      "rel_log_prs",
+      "rel_log_lines",
+      "rel_log_words",
+      "rank_in_team",
+      "team_size_norm",
+      "att_vs_team_median",
+      "hist_blended_prior",
+      "hist_rule_prior",
+      "hist_eval_density",
+      "essay_depth_norm",
+      "rel_git_balance",
+      "text_unique_ratio",
+      "text_chars_per_word",
+      "text_newline_density",
+      "text_digit_ratio",
+      "text_long_token_ratio",
+      "lm_semantic_e0",
+      "lm_semantic_e1",
+      "lm_semantic_e2",
+      "lm_semantic_e3",
+      "lm_semantic_e4",
+      "lm_semantic_e5",
+      "lm_semantic_e6",
+      "lm_semantic_e7"
+    ],
+    "target_mix": "0.58*normalizedScore + 0.42*structural_absolute",
+    "beyond_rule_signals": [
+      "sqlite_member_history_prior",
+      "session_pairwise_ranking_aux",
+      "sklearn_histgradientboosting_blend_with_nn",
+      "allowlisted_json_benchmark_priors",
+      "research_normative_z_profile_json"
+    ],
+    "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+    "dl_roadmap": {
+      "version": 6,
+      "phase_count": 10,
+      "phases_ko": [
+        "1) 데이터 늘리기 — JSONL 누적·TEAM_TRAIN_RESERVOIR_MAX·합성 배치(team_synthetic_bulk)",
+        "2) 라벨 정의 고정 — hybrid_dl_target·STRUCTURAL_TARGET_WEIGHT·행에 label_spec_version·feature_version 기록",
+        "3) 이상 샘플 정리 — TEAM_TRAIN_OUTLIER_IQR_K 로 라벨 y IQR 밖 행 제거(학습 행 부족 시 자동 유지)",
+        "4) 피처 확장 — FEATURE_VERSION·34차원 build_feature_vector(형태 신호 + 선택적 다국어 문장 임베딩 8차원)",
+        "5) 시간 홀드아웃 — TEAM_HOLDOUT_TIME_FRAC 로 최근 구간을 학습에서 제외·holdout_time_mae/pearson/r2 기록",
+        "6) 세션 CV·앙상블 — 동일 sess 누수 방지·PyTorch MLP 앙상블·MC 드롭아웃·GBDT 블렌드·의미 차원 학습 규제(semantic_train_regularization)",
+        "7) 하이퍼 탐색 확대 — TEAM_TORCH_EXTENDED_HP=1 시 그리드 변형 후보 추가(시간↑)",
+        "8) 용량 프로파일 — standard / large / xlarge_lite(CPU 경량 5층) / xlarge / xxl·TEAM_TORCH_ENSEMBLE·TEAM_TORCH_CONTEST_MAX(심사 최고 품질)",
+        "9) 품질 메타 — dl_quality_unified: CV·tail·캘리브·시간 홀드아웃·데이터 파이프라인·training_regularization",
+        "10) API·감사 — GET /api/capabilities·dataset-label-summary·dataset SHA-256·GET /api/team/report"
+      ],
+      "scope_note_ko": "본 모델은 팀 기여도용 표(수치) 회귀·앙상블이며, 생성형 거대 언어모델과 과제·규모가 다릅니다. 데이터·홀드아웃·피처·하이퍼·용량을 조합해 도메인에서 닿을 수 있는 성능에 가깝게 맞추는 것이 목표입니다."
+    },
+    "contest_transparency": {
+      "purpose_ko": "규칙 기반 점수를 보조하는 데이터 학습 신호(참고용)",
+      "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+      "target_mix_for_training_ko": "0.58*normalizedScore + 0.42*structural_absolute",
+      "feature_version": 6,
+      "backend_reported": "pytorch",
+      "pytorch_in_use": true,
+      "enabled": true,
+      "sample_count_at_run": 334,
+      "rubric_alignment_ko": {
+        "technical_completeness_ko": "피처 버전·입력 차원·(가능 시) 교차검증 MAE·앙상블·선형 보정 계수·불확실도 샘플 수를 `dl_model_info.quality`에 노출하고, CV·tail·NN+GBDT 블렌드·calibration은 `quality.dl_quality_unified` 한 객체로도 요약됨.",
+        "ai_efficiency_ko": "PyTorch MLP 앙상블(+ MC 드롭아웃 불확실도)과 경량 선형 폴백을 단계적으로 사용하고, 팀 단위 배치 추론으로 호출 비용을 줄임.",
+        "planning_practical_ko": "최종 화면 점수는 규칙 엔진 정규화 점수와 DL 보조 점수를 고정 비율로 블렌드하며, 교육 현장의 ‘참고·보조’ 용도임을 응답 disclaimer와 함께 명시.",
+        "creativity_ko": "세션 내 순위 보조 학습, 과거 평가 이력 사전, 서술 형태 피처 등 룰만으로 잡기 어려운 신호를 결합."
+      },
+      "limitations_ko": [
+        "입력은 집계된 Git 수치·출석·자기서술 텍스트 형태 특성 등으로, 코드 품질·리뷰 내용을 직접 이해하지는 않습니다.",
+        "팀·과제마다 분포가 달라 절대 점수 비교에는 한계가 있습니다.",
+        "데이터가 적을 때는 선형 모델 또는 룰 점수에 가깝게 동작할 수 있습니다.",
+        "최종 성적·징계·인사 결정을 자동 대체하지 않으며, 교육자 판단이 우선입니다."
+      ],
+      "signals_disclosed_ko": [
+        "34차원 피처(tabular + 선택적 다국어 문장 임베딩 8차원): 커밋·PR·라인·출석·서술·팀 상대 지표·과거 이력·텍스트 형태·에세이 깊이·Git 균형 등",
+        "선택적 웹 사전(priors)으로 소폭 보정(상한 있음)"
+      ],
+      "quality_snapshot": {
+        "validation_mae_mean": 2.6695,
+        "cv_mae_mean": 4.1676,
+        "ensemble_size": 10,
+        "calibration": {
+          "a": 0.9686,
+          "b": 2.2387
+        },
+        "feature_version": 6,
+        "input_dim": 34,
+        "dl_quality_unified": {
+          "schema": "dl_quality_unified_v4",
+          "cv": {
+            "split_strategy": "rolling_time",
+            "unique_groups": 215,
+            "mae_mean": 4.1676,
+            "vs_validation_gap": 1.4981
+          },
+          "validation_mae_mean": 2.6695,
+          "chronological_tail": {
+            "mae_mean": 0.313,
+            "fraction": 0.1198,
+            "note": "동일 데이터로 학습된 모델의 시간순 꼬리 구간 MAE; 드리프트·포화 감지용(순수 홀드아웃 아님)."
+          },
+          "nn_gbdt_blend": {
+            "gbdt_present": true,
+            "nn_gbdt_blend_alpha": 0.45,
+            "gbdt_validation_blend_mae": 1.9884
+          },
+          "calibration_linear": {
+            "a": 0.9686,
+            "b": 2.2387
+          },
+          "fit_metrics": {
+            "calibration_pearson_r": 0.9871,
+            "calibration_r2": 0.9732,
+            "note_ko": "검증에 쓰인 예측(선형 보정 전)·라벨의 피어슨·R². 학습 데이터 위에서 측정되어 낙관될 수 있음."
+          },
+          "holdout_time": {
+            "active": false,
+            "split": {
+              "active": false,
+              "reason": "frac_zero"
+            },
+            "mae": null,
+            "pearson_r": null,
+            "r2": null,
+            "note_ko": null
+          },
+          "data_pipeline": {
+            "outlier_filter": {
+              "enabled": false,
+              "skipped": 0
+            },
+            "effective_training_rows": 334,
+            "label_spec_version": 1
+          },
+          "explainability": {
+            "permutation_importance_top": [
+              {
+                "feature": "rank_in_team",
+                "delta_mae": 8.367509
+              },
+              {
+                "feature": "log_prs",
+                "delta_mae": 6.267917
+              },
+              {
+                "feature": "team_size_norm",
+                "delta_mae": 2.684258
+              },
+              {
+                "feature": "rel_log_lines",
+                "delta_mae": 2.222362
+              },
+              {
+                "feature": "log_lines",
+                "delta_mae": 1.988712
+              },
+              {
+                "feature": "log_commits",
+                "delta_mae": 1.798694
+              },
+              {
+                "feature": "rel_log_commits",
+                "delta_mae": 1.543541
+              },
+              {
+                "feature": "activity_density",
+                "delta_mae": 1.52678
+              },
+              {
+                "feature": "text_unique_ratio",
+                "delta_mae": 1.494533
+              },
+              {
+                "feature": "attendance_norm",
+                "delta_mae": 1.141014
+              }
+            ],
+            "input_noise_std_training": 0.0,
+            "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+          },
+          "dl_roadmap_version": 5
+        },
+        "promotion_gate": {
+          "accepted": true,
+          "reasons": [
+            "metrics_ok"
+          ]
+        },
+        "feature_drift": {
+          "drift_score_0_100": 93.09,
+          "drift_level": "low",
+          "mean_abs_z_shift": 0.3143
+        },
+        "explainability_snapshot": {
+          "permutation_importance_top": [
+            {
+              "feature": "rank_in_team",
+              "delta_mae": 8.367509
+            },
+            {
+              "feature": "log_prs",
+              "delta_mae": 6.267917
+            },
+            {
+              "feature": "team_size_norm",
+              "delta_mae": 2.684258
+            },
+            {
+              "feature": "rel_log_lines",
+              "delta_mae": 2.222362
+            },
+            {
+              "feature": "log_lines",
+              "delta_mae": 1.988712
+            },
+            {
+              "feature": "log_commits",
+              "delta_mae": 1.798694
+            },
+            {
+              "feature": "rel_log_commits",
+              "delta_mae": 1.543541
+            },
+            {
+              "feature": "activity_density",
+              "delta_mae": 1.52678
+            },
+            {
+              "feature": "text_unique_ratio",
+              "delta_mae": 1.494533
+            },
+            {
+              "feature": "attendance_norm",
+              "delta_mae": 1.141014
+            }
+          ],
+          "input_noise_std_training": 0.0,
+          "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+        },
+        "operations_playbook": {
+          "recommendation_level": "ok",
+          "summary_ko": "배치 피처 분포와 학습 메타가 대체로 일치하며, 별도 조치 없이 참고·모니터링 수준입니다.",
+          "checklist_ko": [
+            "치환 중요도 상위 피처는 품질 메타·아래 설명 패널 참고"
+          ],
+          "indicators": {
+            "drift": {
+              "drift_score_0_100": 93.09,
+              "drift_level": "low",
+              "mean_abs_z_shift": 0.3143
+            },
+            "promotion_gate": {
+              "accepted": true,
+              "reasons": [
+                "metrics_ok"
+              ]
+            },
+            "sample_count": 334,
+            "pytorch_active": true,
+            "last_train_in_request": {
+              "trained": false,
+              "reason": null
+            }
+          }
+        },
+        "semantic_encoder": {
+          "enabled": false,
+          "model_id": null,
+          "approx_parameters_note": "인코더는 sentence-transformers 카탈로그 기준(다국어 MiniLM 계열 약 1e8 파라미터급).",
+          "extra_dims": 8,
+          "note_ko": "TEAM_SEMANTIC_ENCODER=1일 때 자기서술을 문장 임베딩으로 인코딩한 뒤 8개 구간 평균+tanh로 압축합니다. 0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다. 학습 시 과적합 완화는 team_torch_model 의 semantic_train_regularization·TEAM_SEMANTIC_AUTO_REG 를 참고하세요."
+        }
+      },
+      "verification_hints_ko": [
+        "GET /api/capabilities — 심사 4축·엔드포인트 목록",
+        "POST /api/team/report — scores[].dl_score, dl_confidence, dl_top_factors, dl_model_info",
+        "docs/CONTEST_RUBRIC.md — 근거 경로"
+      ]
+    }
+  },
+  "evaluation_log": {
+    "request_id": "11798288-4717-4330-b363-94dd7f43ed4c",
+    "timestamp": "2026-04-10T15:54:49.769196+00:00",
+    "project_name": "데모: 팀 기여도 평가 (샘플 입력)",
+    "use_deep_learning": true,
+    "deep_learning_accumulate_samples": false,
+    "input_hash": "dd23c037e7f52f98839408da",
+    "input_data": [
+      {
+        "name": "김민지",
+        "commits": 42,
+        "prs": 8,
+        "lines": 3200,
+        "attendance": 95.0,
+        "selfReport": "백엔드 API와 DB 스키마 설계를 맡았습니다. 스프린트마다 페어 프로그래밍으로 리뷰를 주도했고, 장애 대응 시 온콜에 참여했습니다."
+      },
+      {
+        "name": "이준호",
+        "commits": 28,
+        "prs": 5,
+        "lines": 2100,
+        "attendance": 88.0,
+        "selfReport": "프론트엔드 화면과 컴포넌트 라이브러리를 구축했습니다. 접근성 점검과 디자인 시스템 문서 초안을 작성했습니다."
+      },
+      {
+        "name": "박서연",
+        "commits": 15,
+        "prs": 3,
+        "lines": 890,
+        "attendance": 92.0,
+        "selfReport": "CI 테스트 보강과 배포 파이프라인 점검, 릴리즈 노트 정리를 주로 맡았습니다."
+      },
+      {
+        "name": "최도윤",
+        "commits": 8,
+        "prs": 1,
+        "lines": 220,
+        "attendance": 75.0,
+        "selfReport": "문서화와 회의록 정리, 이슈 트리아지를 도왔습니다."
+      }
+    ],
+    "score": [
+      {
+        "member_name": "김민지",
+        "rawScore": 78.03,
+        "normalizedScore": 100.0,
+        "rank": 1,
+        "top_percent": 25.0,
+        "breakdown": {
+          "commits": 78.13953488372093,
+          "prs": 80.0,
+          "lines": 85.61872909698997,
+          "attendance": 95.0,
+          "self_report": 55.65217391304348
+        },
+        "weighted_points": {
+          "commits": 19.53,
+          "prs": 16.0,
+          "lines": 17.12,
+          "attendance": 14.25,
+          "self_report": 11.13
+        },
+        "pct_vs_team_mean": 59.8,
+        "data_reliability": {
+          "score_0_100": 77.6,
+          "git_ratio_percent": 80.0,
+          "self_report_ratio_percent": 20.0,
+          "note": ""
+        },
+        "dl_score": 100.0,
+        "dl_confidence": 80.0,
+        "blendedScore": 100.0,
+        "dl_top_factors": [
+          "코드 변화량 +",
+          "커밋 활동 +",
+          "자기서술 밀도 +"
+        ],
+        "external_benchmark_score": null,
+        "llm_alignment_score": null,
+        "research_alignment_score": null
+      },
+      {
+        "member_name": "이준호",
+        "rawScore": 55.81,
+        "normalizedScore": 60.11,
+        "rank": 2,
+        "top_percent": 50.0,
+        "breakdown": {
+          "commits": 52.093023255813954,
+          "prs": 50.0,
+          "lines": 56.187290969899664,
+          "attendance": 88.0,
+          "self_report": 41.73913043478261
+        },
+        "weighted_points": {
+          "commits": 13.02,
+          "prs": 10.0,
+          "lines": 11.24,
+          "attendance": 13.2,
+          "self_report": 8.35
+        },
+        "pct_vs_team_mean": 14.3,
+        "data_reliability": {
+          "score_0_100": 85.9,
+          "git_ratio_percent": 80.0,
+          "self_report_ratio_percent": 20.0,
+          "note": ""
+        },
+        "dl_score": 72.28,
+        "dl_confidence": 81.2,
+        "blendedScore": 65.5,
+        "dl_top_factors": [
+          "코드 변화량 +",
+          "커밋 활동 +",
+          "자기서술 밀도 +"
+        ],
+        "external_benchmark_score": null,
+        "llm_alignment_score": null,
+        "research_alignment_score": null
+      },
+      {
+        "member_name": "박서연",
+        "rawScore": 39.19,
+        "normalizedScore": 30.28,
+        "rank": 3,
+        "top_percent": 75.0,
+        "breakdown": {
+          "commits": 27.906976744186046,
+          "prs": 30.0,
+          "lines": 23.812709030100336,
+          "attendance": 92.0,
+          "self_report": 38.26086956521739
+        },
+        "weighted_points": {
+          "commits": 6.98,
+          "prs": 6.0,
+          "lines": 4.76,
+          "attendance": 13.8,
+          "self_report": 7.65
+        },
+        "pct_vs_team_mean": -19.8,
+        "data_reliability": {
+          "score_0_100": 99.1,
+          "git_ratio_percent": 80.0,
+          "self_report_ratio_percent": 20.0,
+          "note": ""
+        },
+        "dl_score": 45.61,
+        "dl_confidence": 85.7,
+        "blendedScore": 37.2,
+        "dl_top_factors": [
+          "코드 변화량 +",
+          "커밋 활동 +",
+          "자기서술 밀도 +"
+        ],
+        "external_benchmark_score": null,
+        "llm_alignment_score": null,
+        "research_alignment_score": null
+      },
+      {
+        "member_name": "최도윤",
+        "rawScore": 22.32,
+        "normalizedScore": 0.0,
+        "rank": 4,
+        "top_percent": 100.0,
+        "breakdown": {
+          "commits": 14.88372093023256,
+          "prs": 10.0,
+          "lines": 5.886287625418061,
+          "attendance": 75.0,
+          "self_report": 20.869565217391305
+        },
+        "weighted_points": {
+          "commits": 3.72,
+          "prs": 2.0,
+          "lines": 1.18,
+          "attendance": 11.25,
+          "self_report": 4.17
+        },
+        "pct_vs_team_mean": -54.3,
+        "data_reliability": {
+          "score_0_100": 98.5,
+          "git_ratio_percent": 80.0,
+          "self_report_ratio_percent": 20.0,
+          "note": ""
+        },
+        "dl_score": 31.11,
+        "dl_confidence": 97.2,
+        "blendedScore": 14.76,
+        "dl_top_factors": [
+          "코드 변화량 +",
+          "rel_log_lines -",
+          "커밋 활동 +"
+        ],
+        "external_benchmark_score": null,
+        "llm_alignment_score": null,
+        "research_alignment_score": null
+      }
+    ],
+    "dl_model_info": {
+      "model_name": "team-torch-mlp",
+      "enabled": true,
+      "model_version": "team-torch-20260409174732",
+      "trained_at": "2026-04-09T17:47:32.361618+00:00",
+      "sample_count": 334,
+      "auto_retrain": false,
+      "backend": "pytorch",
+      "quality": {
+        "validation_mae_mean": 2.6695,
+        "cv_mae_mean": 4.1676,
+        "ensemble_size": 10,
+        "best_hparams": {
+          "hidden1": 768,
+          "hidden2": 384,
+          "hidden3": 192,
+          "hidden4": 96,
+          "dropout": 0.17,
+          "lr": 0.0019,
+          "weight_decay": 0.000128,
+          "epochs": 740,
+          "name": "silu",
+          "activation": "silu",
+          "use_residual_mlp": false
+        },
+        "best_architecture": "silu",
+        "calibration": {
+          "a": 0.9686,
+          "b": 2.2387
+        },
+        "calibration_pearson_r": 0.9871,
+        "calibration_r2": 0.9732,
+        "holdout_time_mae": null,
+        "holdout_time_pearson_r": null,
+        "holdout_time_r2": null,
+        "label_spec_version": 1,
+        "feature_version": 6,
+        "input_dim": 34,
+        "cv_vs_validation_gap": 1.4981,
+        "chronological_tail_mae_mean": 0.313,
+        "model_size_profile": "xlarge",
+        "approx_parameters": 414721,
+        "mc_dropout_samples": 28,
+        "gbdt_present": true,
+        "nn_gbdt_blend_alpha": 0.45,
+        "gbdt_validation_blend_mae": 1.9884,
+        "cv_split_strategy": "rolling_time",
+        "cv_unique_groups": 215,
+        "dataset_file_sha256": "1f210976a9623983d63b8ae1d3d393244341b654512180b90b8bc9ed954b616d",
+        "gbdt_top_features": null,
+        "dl_roadmap_version": 5,
+        "dl_quality_unified": {
+          "schema": "dl_quality_unified_v4",
+          "cv": {
+            "split_strategy": "rolling_time",
+            "unique_groups": 215,
+            "mae_mean": 4.1676,
+            "vs_validation_gap": 1.4981
+          },
+          "validation_mae_mean": 2.6695,
+          "chronological_tail": {
+            "mae_mean": 0.313,
+            "fraction": 0.1198,
+            "note": "동일 데이터로 학습된 모델의 시간순 꼬리 구간 MAE; 드리프트·포화 감지용(순수 홀드아웃 아님)."
+          },
+          "nn_gbdt_blend": {
+            "gbdt_present": true,
+            "nn_gbdt_blend_alpha": 0.45,
+            "gbdt_validation_blend_mae": 1.9884
+          },
+          "calibration_linear": {
+            "a": 0.9686,
+            "b": 2.2387
+          },
+          "fit_metrics": {
+            "calibration_pearson_r": 0.9871,
+            "calibration_r2": 0.9732,
+            "note_ko": "검증에 쓰인 예측(선형 보정 전)·라벨의 피어슨·R². 학습 데이터 위에서 측정되어 낙관될 수 있음."
+          },
+          "holdout_time": {
+            "active": false,
+            "split": {
+              "active": false,
+              "reason": "frac_zero"
+            },
+            "mae": null,
+            "pearson_r": null,
+            "r2": null,
+            "note_ko": null
+          },
+          "data_pipeline": {
+            "outlier_filter": {
+              "enabled": false,
+              "skipped": 0
+            },
+            "effective_training_rows": 334,
+            "label_spec_version": 1
+          },
+          "explainability": {
+            "permutation_importance_top": [
+              {
+                "feature": "rank_in_team",
+                "delta_mae": 8.367509
+              },
+              {
+                "feature": "log_prs",
+                "delta_mae": 6.267917
+              },
+              {
+                "feature": "team_size_norm",
+                "delta_mae": 2.684258
+              },
+              {
+                "feature": "rel_log_lines",
+                "delta_mae": 2.222362
+              },
+              {
+                "feature": "log_lines",
+                "delta_mae": 1.988712
+              },
+              {
+                "feature": "log_commits",
+                "delta_mae": 1.798694
+              },
+              {
+                "feature": "rel_log_commits",
+                "delta_mae": 1.543541
+              },
+              {
+                "feature": "activity_density",
+                "delta_mae": 1.52678
+              },
+              {
+                "feature": "text_unique_ratio",
+                "delta_mae": 1.494533
+              },
+              {
+                "feature": "attendance_norm",
+                "delta_mae": 1.141014
+              }
+            ],
+            "input_noise_std_training": 0.0,
+            "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+          },
+          "dl_roadmap_version": 5
+        },
+        "promotion_gate": {
+          "accepted": true,
+          "reasons": [
+            "metrics_ok"
+          ]
+        },
+        "feature_drift": {
+          "drift_score_0_100": 93.09,
+          "drift_level": "low",
+          "mean_abs_z_shift": 0.3143
+        },
+        "explainability_snapshot": {
+          "permutation_importance_top": [
+            {
+              "feature": "rank_in_team",
+              "delta_mae": 8.367509
+            },
+            {
+              "feature": "log_prs",
+              "delta_mae": 6.267917
+            },
+            {
+              "feature": "team_size_norm",
+              "delta_mae": 2.684258
+            },
+            {
+              "feature": "rel_log_lines",
+              "delta_mae": 2.222362
+            },
+            {
+              "feature": "log_lines",
+              "delta_mae": 1.988712
+            },
+            {
+              "feature": "log_commits",
+              "delta_mae": 1.798694
+            },
+            {
+              "feature": "rel_log_commits",
+              "delta_mae": 1.543541
+            },
+            {
+              "feature": "activity_density",
+              "delta_mae": 1.52678
+            },
+            {
+              "feature": "text_unique_ratio",
+              "delta_mae": 1.494533
+            },
+            {
+              "feature": "attendance_norm",
+              "delta_mae": 1.141014
+            }
+          ],
+          "input_noise_std_training": 0.0,
+          "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+        },
+        "operations_playbook": {
+          "recommendation_level": "ok",
+          "summary_ko": "배치 피처 분포와 학습 메타가 대체로 일치하며, 별도 조치 없이 참고·모니터링 수준입니다.",
+          "checklist_ko": [
+            "치환 중요도 상위 피처는 품질 메타·아래 설명 패널 참고"
+          ],
+          "indicators": {
+            "drift": {
+              "drift_score_0_100": 93.09,
+              "drift_level": "low",
+              "mean_abs_z_shift": 0.3143
+            },
+            "promotion_gate": {
+              "accepted": true,
+              "reasons": [
+                "metrics_ok"
+              ]
+            },
+            "sample_count": 334,
+            "pytorch_active": true,
+            "last_train_in_request": {
+              "trained": false,
+              "reason": null
+            }
+          }
+        },
+        "semantic_encoder": {
+          "enabled": false,
+          "model_id": null,
+          "approx_parameters_note": "인코더는 sentence-transformers 카탈로그 기준(다국어 MiniLM 계열 약 1e8 파라미터급).",
+          "extra_dims": 8,
+          "note_ko": "TEAM_SEMANTIC_ENCODER=1일 때 자기서술을 문장 임베딩으로 인코딩한 뒤 8개 구간 평균+tanh로 압축합니다. 0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다. 학습 시 과적합 완화는 team_torch_model 의 semantic_train_regularization·TEAM_SEMANTIC_AUTO_REG 를 참고하세요."
+        }
+      },
+      "web_priors": {
+        "enabled": false,
+        "source": "local-default",
+        "prior_adjustment": {
+          "prior_strength": 1.0,
+          "gap_weights": {
+            "commit": 5.0,
+            "pr": 4.0,
+            "lines": 0.0,
+            "attendance": 3.0,
+            "self_report": 0.0
+          },
+          "max_delta": 12.0,
+          "source_title": null,
+          "methodology_note_ko": null,
+          "cohort": null,
+          "valid_until": null,
+          "env_strength_multiplier": 1.0
+        },
+        "benchmark_inference": {
+          "enabled": false,
+          "blend_weight": 0.3,
+          "note_ko": ""
+        }
+      },
+      "benchmark_inference": {
+        "enabled": false,
+        "blend_weight": 0.3,
+        "note_ko": ""
+      },
+      "prior_calibration": {
+        "adjustment": {
+          "prior_strength": 1.0,
+          "gap_weights": {
+            "commit": 5.0,
+            "pr": 4.0,
+            "lines": 0.0,
+            "attendance": 3.0,
+            "self_report": 0.0
+          },
+          "max_delta": 12.0,
+          "source_title": null,
+          "methodology_note_ko": null,
+          "cohort": null,
+          "valid_until": null,
+          "env_strength_multiplier": 1.0
+        },
+        "delta_stats": {
+          "min": -0.4,
+          "max": 4.347,
+          "mean": 2.346,
+          "abs_max": 4.347
+        },
+        "note_ko": "공개 벤치마크·기관 통계에서 정의한 기대값(priors)과 입력 피처의 차이로 DL 보조 점수를 가중·상한이 있는 범위에서만 보정합니다. 외부 자료는 학습 라벨이 아니라 교정(calibration) 용도입니다."
+      },
+      "research_evidence": {
+        "active": false,
+        "source": null,
+        "reason": "no_file",
+        "path": null
+      },
+      "input_features": [
+        "log_commits",
+        "log_prs",
+        "log_lines",
+        "attendance_norm",
+        "log_self_report_words",
+        "log_report_chars",
+        "pr_vs_commit",
+        "lines_per_pr",
+        "activity_density",
+        "rel_log_commits",
+        "rel_log_prs",
+        "rel_log_lines",
+        "rel_log_words",
+        "rank_in_team",
+        "team_size_norm",
+        "att_vs_team_median",
+        "hist_blended_prior",
+        "hist_rule_prior",
+        "hist_eval_density",
+        "essay_depth_norm",
+        "rel_git_balance",
+        "text_unique_ratio",
+        "text_chars_per_word",
+        "text_newline_density",
+        "text_digit_ratio",
+        "text_long_token_ratio",
+        "lm_semantic_e0",
+        "lm_semantic_e1",
+        "lm_semantic_e2",
+        "lm_semantic_e3",
+        "lm_semantic_e4",
+        "lm_semantic_e5",
+        "lm_semantic_e6",
+        "lm_semantic_e7"
+      ],
+      "target_mix": "0.58*normalizedScore + 0.42*structural_absolute",
+      "beyond_rule_signals": [
+        "sqlite_member_history_prior",
+        "session_pairwise_ranking_aux",
+        "sklearn_histgradientboosting_blend_with_nn",
+        "allowlisted_json_benchmark_priors",
+        "research_normative_z_profile_json"
+      ],
+      "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+      "dl_roadmap": {
+        "version": 6,
+        "phase_count": 10,
+        "phases_ko": [
+          "1) 데이터 늘리기 — JSONL 누적·TEAM_TRAIN_RESERVOIR_MAX·합성 배치(team_synthetic_bulk)",
+          "2) 라벨 정의 고정 — hybrid_dl_target·STRUCTURAL_TARGET_WEIGHT·행에 label_spec_version·feature_version 기록",
+          "3) 이상 샘플 정리 — TEAM_TRAIN_OUTLIER_IQR_K 로 라벨 y IQR 밖 행 제거(학습 행 부족 시 자동 유지)",
+          "4) 피처 확장 — FEATURE_VERSION·34차원 build_feature_vector(형태 신호 + 선택적 다국어 문장 임베딩 8차원)",
+          "5) 시간 홀드아웃 — TEAM_HOLDOUT_TIME_FRAC 로 최근 구간을 학습에서 제외·holdout_time_mae/pearson/r2 기록",
+          "6) 세션 CV·앙상블 — 동일 sess 누수 방지·PyTorch MLP 앙상블·MC 드롭아웃·GBDT 블렌드·의미 차원 학습 규제(semantic_train_regularization)",
+          "7) 하이퍼 탐색 확대 — TEAM_TORCH_EXTENDED_HP=1 시 그리드 변형 후보 추가(시간↑)",
+          "8) 용량 프로파일 — standard / large / xlarge_lite(CPU 경량 5층) / xlarge / xxl·TEAM_TORCH_ENSEMBLE·TEAM_TORCH_CONTEST_MAX(심사 최고 품질)",
+          "9) 품질 메타 — dl_quality_unified: CV·tail·캘리브·시간 홀드아웃·데이터 파이프라인·training_regularization",
+          "10) API·감사 — GET /api/capabilities·dataset-label-summary·dataset SHA-256·GET /api/team/report"
+        ],
+        "scope_note_ko": "본 모델은 팀 기여도용 표(수치) 회귀·앙상블이며, 생성형 거대 언어모델과 과제·규모가 다릅니다. 데이터·홀드아웃·피처·하이퍼·용량을 조합해 도메인에서 닿을 수 있는 성능에 가깝게 맞추는 것이 목표입니다."
+      },
+      "contest_transparency": {
+        "purpose_ko": "규칙 기반 점수를 보조하는 데이터 학습 신호(참고용)",
+        "blend_formula": "dynamic: rule_w*normalizedScore + dl_w*dl_score (dl_w from confidence/uncertainty)",
+        "target_mix_for_training_ko": "0.58*normalizedScore + 0.42*structural_absolute",
+        "feature_version": 6,
+        "backend_reported": "pytorch",
+        "pytorch_in_use": true,
+        "enabled": true,
+        "sample_count_at_run": 334,
+        "rubric_alignment_ko": {
+          "technical_completeness_ko": "피처 버전·입력 차원·(가능 시) 교차검증 MAE·앙상블·선형 보정 계수·불확실도 샘플 수를 `dl_model_info.quality`에 노출하고, CV·tail·NN+GBDT 블렌드·calibration은 `quality.dl_quality_unified` 한 객체로도 요약됨.",
+          "ai_efficiency_ko": "PyTorch MLP 앙상블(+ MC 드롭아웃 불확실도)과 경량 선형 폴백을 단계적으로 사용하고, 팀 단위 배치 추론으로 호출 비용을 줄임.",
+          "planning_practical_ko": "최종 화면 점수는 규칙 엔진 정규화 점수와 DL 보조 점수를 고정 비율로 블렌드하며, 교육 현장의 ‘참고·보조’ 용도임을 응답 disclaimer와 함께 명시.",
+          "creativity_ko": "세션 내 순위 보조 학습, 과거 평가 이력 사전, 서술 형태 피처 등 룰만으로 잡기 어려운 신호를 결합."
+        },
+        "limitations_ko": [
+          "입력은 집계된 Git 수치·출석·자기서술 텍스트 형태 특성 등으로, 코드 품질·리뷰 내용을 직접 이해하지는 않습니다.",
+          "팀·과제마다 분포가 달라 절대 점수 비교에는 한계가 있습니다.",
+          "데이터가 적을 때는 선형 모델 또는 룰 점수에 가깝게 동작할 수 있습니다.",
+          "최종 성적·징계·인사 결정을 자동 대체하지 않으며, 교육자 판단이 우선입니다."
+        ],
+        "signals_disclosed_ko": [
+          "34차원 피처(tabular + 선택적 다국어 문장 임베딩 8차원): 커밋·PR·라인·출석·서술·팀 상대 지표·과거 이력·텍스트 형태·에세이 깊이·Git 균형 등",
+          "선택적 웹 사전(priors)으로 소폭 보정(상한 있음)"
+        ],
+        "quality_snapshot": {
+          "validation_mae_mean": 2.6695,
+          "cv_mae_mean": 4.1676,
+          "ensemble_size": 10,
+          "calibration": {
+            "a": 0.9686,
+            "b": 2.2387
+          },
+          "feature_version": 6,
+          "input_dim": 34,
+          "dl_quality_unified": {
+            "schema": "dl_quality_unified_v4",
+            "cv": {
+              "split_strategy": "rolling_time",
+              "unique_groups": 215,
+              "mae_mean": 4.1676,
+              "vs_validation_gap": 1.4981
+            },
+            "validation_mae_mean": 2.6695,
+            "chronological_tail": {
+              "mae_mean": 0.313,
+              "fraction": 0.1198,
+              "note": "동일 데이터로 학습된 모델의 시간순 꼬리 구간 MAE; 드리프트·포화 감지용(순수 홀드아웃 아님)."
+            },
+            "nn_gbdt_blend": {
+              "gbdt_present": true,
+              "nn_gbdt_blend_alpha": 0.45,
+              "gbdt_validation_blend_mae": 1.9884
+            },
+            "calibration_linear": {
+              "a": 0.9686,
+              "b": 2.2387
+            },
+            "fit_metrics": {
+              "calibration_pearson_r": 0.9871,
+              "calibration_r2": 0.9732,
+              "note_ko": "검증에 쓰인 예측(선형 보정 전)·라벨의 피어슨·R². 학습 데이터 위에서 측정되어 낙관될 수 있음."
+            },
+            "holdout_time": {
+              "active": false,
+              "split": {
+                "active": false,
+                "reason": "frac_zero"
+              },
+              "mae": null,
+              "pearson_r": null,
+              "r2": null,
+              "note_ko": null
+            },
+            "data_pipeline": {
+              "outlier_filter": {
+                "enabled": false,
+                "skipped": 0
+              },
+              "effective_training_rows": 334,
+              "label_spec_version": 1
+            },
+            "explainability": {
+              "permutation_importance_top": [
+                {
+                  "feature": "rank_in_team",
+                  "delta_mae": 8.367509
+                },
+                {
+                  "feature": "log_prs",
+                  "delta_mae": 6.267917
+                },
+                {
+                  "feature": "team_size_norm",
+                  "delta_mae": 2.684258
+                },
+                {
+                  "feature": "rel_log_lines",
+                  "delta_mae": 2.222362
+                },
+                {
+                  "feature": "log_lines",
+                  "delta_mae": 1.988712
+                },
+                {
+                  "feature": "log_commits",
+                  "delta_mae": 1.798694
+                },
+                {
+                  "feature": "rel_log_commits",
+                  "delta_mae": 1.543541
+                },
+                {
+                  "feature": "activity_density",
+                  "delta_mae": 1.52678
+                },
+                {
+                  "feature": "text_unique_ratio",
+                  "delta_mae": 1.494533
+                },
+                {
+                  "feature": "attendance_norm",
+                  "delta_mae": 1.141014
+                }
+              ],
+              "input_noise_std_training": 0.0,
+              "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+            },
+            "dl_roadmap_version": 5
+          },
+          "promotion_gate": {
+            "accepted": true,
+            "reasons": [
+              "metrics_ok"
+            ]
+          },
+          "feature_drift": {
+            "drift_score_0_100": 93.09,
+            "drift_level": "low",
+            "mean_abs_z_shift": 0.3143
+          },
+          "explainability_snapshot": {
+            "permutation_importance_top": [
+              {
+                "feature": "rank_in_team",
+                "delta_mae": 8.367509
+              },
+              {
+                "feature": "log_prs",
+                "delta_mae": 6.267917
+              },
+              {
+                "feature": "team_size_norm",
+                "delta_mae": 2.684258
+              },
+              {
+                "feature": "rel_log_lines",
+                "delta_mae": 2.222362
+              },
+              {
+                "feature": "log_lines",
+                "delta_mae": 1.988712
+              },
+              {
+                "feature": "log_commits",
+                "delta_mae": 1.798694
+              },
+              {
+                "feature": "rel_log_commits",
+                "delta_mae": 1.543541
+              },
+              {
+                "feature": "activity_density",
+                "delta_mae": 1.52678
+              },
+              {
+                "feature": "text_unique_ratio",
+                "delta_mae": 1.494533
+              },
+              {
+                "feature": "attendance_norm",
+                "delta_mae": 1.141014
+              }
+            ],
+            "input_noise_std_training": 0.0,
+            "note_ko": "치환 중요도는 검증 부분집합에서 피처 열을 무작위 섞었을 때 MAE 증가량(대략적 기여)입니다. 입력 노이즈는 학습 중에만 적용되는 선택적 일반화입니다."
+          },
+          "operations_playbook": {
+            "recommendation_level": "ok",
+            "summary_ko": "배치 피처 분포와 학습 메타가 대체로 일치하며, 별도 조치 없이 참고·모니터링 수준입니다.",
+            "checklist_ko": [
+              "치환 중요도 상위 피처는 품질 메타·아래 설명 패널 참고"
+            ],
+            "indicators": {
+              "drift": {
+                "drift_score_0_100": 93.09,
+                "drift_level": "low",
+                "mean_abs_z_shift": 0.3143
+              },
+              "promotion_gate": {
+                "accepted": true,
+                "reasons": [
+                  "metrics_ok"
+                ]
+              },
+              "sample_count": 334,
+              "pytorch_active": true,
+              "last_train_in_request": {
+                "trained": false,
+                "reason": null
+              }
+            }
+          },
+          "semantic_encoder": {
+            "enabled": false,
+            "model_id": null,
+            "approx_parameters_note": "인코더는 sentence-transformers 카탈로그 기준(다국어 MiniLM 계열 약 1e8 파라미터급).",
+            "extra_dims": 8,
+            "note_ko": "TEAM_SEMANTIC_ENCODER=1일 때 자기서술을 문장 임베딩으로 인코딩한 뒤 8개 구간 평균+tanh로 압축합니다. 0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다. 학습 시 과적합 완화는 team_torch_model 의 semantic_train_regularization·TEAM_SEMANTIC_AUTO_REG 를 참고하세요."
+          }
+        },
+        "verification_hints_ko": [
+          "GET /api/capabilities — 심사 4축·엔드포인트 목록",
+          "POST /api/team/report — scores[].dl_score, dl_confidence, dl_top_factors, dl_model_info",
+          "docs/CONTEST_RUBRIC.md — 근거 경로"
+        ]
+      }
+    },
+    "anomaly": [
+      {
+        "member_name": "김민지",
+        "flags": []
+      },
+      {
+        "member_name": "이준호",
+        "flags": []
+      },
+      {
+        "member_name": "박서연",
+        "flags": [
+          "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+          "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+        ]
+      },
+      {
+        "member_name": "최도윤",
+        "flags": [
+          "Rule 정규화 점수와 DL 보조 점수 차이 큼: 표면 지표 vs 학습 신호 교차 확인",
+          "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+          "DL 보조 점수 팀 내 최저(모델 관점)",
+          "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+        ]
+      }
+    ],
+    "ai_result": [
+      {
+        "member_name": "김민지",
+        "summary": "김민지의 기여도는 100/100, 팀 평균 대비 +59.8%입니다.",
+        "strengths": [
+          "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+        ],
+        "weaknesses": [
+          "특이 이상 없음"
+        ],
+        "position_in_team": "팀 4명 중 1위 (상위 25.0%).",
+        "recommended_actions": [
+          "PR 리뷰 참여를 주차 목표에 포함하세요."
+        ],
+        "metric_dl_note": ""
+      },
+      {
+        "member_name": "이준호",
+        "summary": "이준호의 기여도는 60/100, 팀 평균 대비 +14.3%입니다.",
+        "strengths": [
+          "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+        ],
+        "weaknesses": [
+          "특이 이상 없음"
+        ],
+        "position_in_team": "팀 4명 중 2위 (상위 50.0%).",
+        "recommended_actions": [
+          "PR 리뷰 참여를 주차 목표에 포함하세요."
+        ],
+        "metric_dl_note": ""
+      },
+      {
+        "member_name": "박서연",
+        "summary": "박서연의 기여도는 30/100, 팀 평균 대비 -19.8%입니다.",
+        "strengths": [
+          "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+        ],
+        "weaknesses": [
+          "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+          "혼합(blended) 점수 팀 대비 현저히 낮음: 무임승차·기여 편중 점검(모델·Rule 결합)"
+        ],
+        "position_in_team": "팀 4명 중 3위 (상위 75.0%).",
+        "recommended_actions": [
+          "PR 리뷰 참여를 주차 목표에 포함하세요."
+        ],
+        "metric_dl_note": ""
+      },
+      {
+        "member_name": "최도윤",
+        "summary": "최도윤의 기여도는 0/100, 팀 평균 대비 -54.3%입니다.",
+        "strengths": [
+          "Git 지표 기반으로 산정 근거를 추적할 수 있습니다."
+        ],
+        "weaknesses": [
+          "Rule 정규화 점수와 DL 보조 점수 차이 큼: 표면 지표 vs 학습 신호 교차 확인",
+          "DL 보조 점수 팀 대비 현저히 낮음(모델 관점)",
+          "DL 보조 점수 팀 내 최저(모델 관점)"
+        ],
+        "position_in_team": "팀 4명 중 4위 (상위 100.0%).",
+        "recommended_actions": [
+          "PR 리뷰 참여를 주차 목표에 포함하세요."
+        ],
+        "metric_dl_note": ""
+      }
+    ],
+    "edge_cases": [],
+    "ai_meta": {
+      "providers_attempted": [
+        "gemini"
+      ],
+      "mode": "fallback_no_keys",
+      "latencies_ms": {
+        "gemini": 1185.97
+      },
+      "models": {
+        "gemini": "gemini-2.5-flash"
+      }
+    },
+    "team_narrative": "",
+    "db_profile": {
+      "teams": 95,
+      "members": 180,
+      "contribution_events": 180,
+      "model_runs": 95
+    }
+  },
+  "team_narrative": "",
+  "ai_meta": {
+    "providers_attempted": [
+      "gemini"
+    ],
+    "mode": "fallback_no_keys",
+    "latencies_ms": {
+      "gemini": 1185.97
+    },
+    "models": {
+      "gemini": "gemini-2.5-flash"
+    }
+  },
+  "disclaimer": "정량 점수는 결정론적으로 계산되며, AI는 설명만 생성합니다."
+}

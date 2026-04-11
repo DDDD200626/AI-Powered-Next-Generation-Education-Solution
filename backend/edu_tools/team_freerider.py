@@ -254,6 +254,9 @@ def _build_rule_metrics(
         consistency_risk=consistency_risk,
         interaction_risk=interaction_risk,
         rule_conditions_met=rule_conditions_met,
+        combined_risk_count=rule_conditions_met,
+        dl_model_freerider_support=False,
+        dl_model_note="",
         risk_level=risk_level,
         grade_ko=grade,
         analysis_lines=lines[:8],
@@ -325,6 +328,76 @@ def compute_freerider_reports(
                 rule_metrics=rm,
             )
         )
+    return out
+
+
+def merge_dl_freerider_signals(
+    members: list[MemberOut],
+    reports: list[FreeriderDetectionReport],
+) -> list[FreeriderDetectionReport]:
+    """DL 혼합 점수(dl_blended_score)가 팀 대비 유의미하게 낮으면 Rule 무임승차 판정에 1 가산.
+
+    - 중앙값 대비 10pt 이상 낮음, 또는 팀 내 최저, 또는 (신뢰도≥48 & 중앙 대비 6pt 이상 낮음)
+    - combined_risk_count = min(5, rule_conditions_met + 1) 로 등급·페널티 재계산
+    """
+    if len(members) != len(reports) or not members:
+        return reports
+    indexed_blends: list[tuple[int, float]] = []
+    for i, m in enumerate(members):
+        if m.dl_blended_score is not None:
+            indexed_blends.append((i, float(m.dl_blended_score)))
+    if len(indexed_blends) < 2:
+        return reports
+    vals = sorted(v for _, v in indexed_blends)
+    med = vals[len(vals) // 2]
+    worst_i = min(indexed_blends, key=lambda x: x[1])[0]
+
+    out: list[FreeriderDetectionReport] = []
+    for i, (mem, rep) in enumerate(zip(members, reports)):
+        db = mem.dl_blended_score
+        if db is None:
+            out.append(rep)
+            continue
+        fdb = float(db)
+        dl_risk = False
+        note = ""
+        if fdb <= med - 10.0:
+            dl_risk = True
+            note = f"DL 혼합 점수가 팀 중앙값 대비 10pt 이상 낮음(중앙 {med:.1f}, 본인 {fdb:.1f})."
+        elif i == worst_i:
+            dl_risk = True
+            note = "DL 혼합 점수가 팀 내 최저입니다."
+        conf = mem.dl_confidence
+        if not dl_risk and conf is not None and float(conf) >= 48.0 and fdb <= med - 6.0:
+            dl_risk = True
+            note = "DL 혼합이 팀 대비 낮고 모델 신뢰도가 일정 수준 이상입니다(보조 가산)."
+
+        if not dl_risk:
+            out.append(rep)
+            continue
+
+        rm = rep.rule_metrics
+        combined = min(5, rm.rule_conditions_met + 1)
+        suspected = combined >= 3
+        final_score = round(rm.blended_score * 0.6, 1) if suspected else round(rm.blended_score, 1)
+        risk_level = _risk_level_from_count(min(combined, 4))
+        grade = _grade_ko(final_score)
+        lines = list(rm.analysis_lines)
+        if note and not any(note[:32] in x for x in lines):
+            lines.insert(0, note)
+        new_rm = rm.model_copy(
+            update={
+                "final_score": final_score,
+                "penalty_applied": suspected,
+                "risk_level": risk_level,
+                "grade_ko": grade,
+                "combined_risk_count": combined,
+                "dl_model_freerider_support": True,
+                "dl_model_note": note,
+                "analysis_lines": lines[:10],
+            }
+        )
+        out.append(rep.model_copy(update={"rule_metrics": new_rm}))
     return out
 
 

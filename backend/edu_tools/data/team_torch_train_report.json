@@ -1,0 +1,26 @@
+{
+  "torch_seed": 42,
+  "model_version": "team-torch-20260409095814",
+  "trained_at": "2026-04-09T09:58:14.484238+00:00",
+  "feature_version": 5,
+  "label_spec_version": 1,
+  "model_size_profile": "standard",
+  "sample_count": 182,
+  "effective_training_rows": 182,
+  "cv_mae_mean": 9.8794,
+  "validation_mae_mean": 4.505,
+  "holdout_time_mae": null,
+  "holdout_time_pearson_r": null,
+  "holdout_time_r2": null,
+  "calibration_pearson_r": 0.9167,
+  "dataset_file_sha256": "e3b68d066d1c076fe71b0cb83e3e0d5b3b9aa2f602c7223c08546be5308045a6",
+  "dl_roadmap_version": 6,
+  "time_holdout_split": {
+    "active": false,
+    "reason": "frac_zero"
+  },
+  "training_outlier_stats": {
+    "enabled": false,
+    "skipped": 0
+  }
+}

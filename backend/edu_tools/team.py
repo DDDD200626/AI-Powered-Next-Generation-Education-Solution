@@ -10,7 +10,7 @@ import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -55,6 +55,15 @@ class MemberIn(BaseModel):
         ge=0,
         le=100,
         description="프로젝트/발표/동료 평가 등 결과 점수(선택, 기여 추정과 비교)",
+    )
+    instructor_freerider_override: Literal["none", "clear_suspicion", "confirm_suspicion"] = Field(
+        "none",
+        description="교육자: 자동 무임승차 의심 플래그를 화면 기준으로 덮어씀(none=미사용).",
+    )
+    instructor_override_note: str = Field(
+        "",
+        max_length=500,
+        description="오버라이드 사유(감사·면담 기록용, 선택).",
     )
 
 
@@ -104,6 +113,14 @@ class TeamEvaluateRequest(BaseModel):
         default_factory=list,
         description="팀원 간 상호작용(리뷰·회의·페어 등). 없으면 기여도 기반 완전 그래프로 추정",
     )
+    use_deep_learning: bool = Field(
+        True,
+        description="False면 Rule·LLM 경로만 쓰고 PyTorch/경량 ML 보조(dl_score 등)를 붙이지 않습니다.",
+    )
+    deep_learning_accumulate_samples: bool = Field(
+        True,
+        description="False면 이번 요청을 학습 풀에 넣지 않고 추론만. use_deep_learning=True일 때만 적용.",
+    )
 
     @model_validator(mode="after")
     def _limit_team_size(self) -> TeamEvaluateRequest:
@@ -139,6 +156,17 @@ class FreeriderRuleMetrics(BaseModel):
     consistency_risk: bool = False
     interaction_risk: bool = False
     rule_conditions_met: int = Field(0, ge=0, le=4)
+    combined_risk_count: int = Field(
+        0,
+        ge=0,
+        le=5,
+        description="Rule 4지표 충족 개수 + DL 보조 가산(최대 5)",
+    )
+    dl_model_freerider_support: bool = Field(
+        False,
+        description="DL 혼합 점수가 팀 대비 유의미하게 낮아 무임승차 판정에 가산됨",
+    )
+    dl_model_note: str = Field("", description="DL 근거 한 줄(있을 때만)")
     risk_level: str = Field("", description="normal | caution | suspected")
     grade_ko: str = Field("", description="핵심 기여 | 일반 | 낮음 | 무임승차 의심")
     analysis_lines: list[str] = Field(default_factory=list, description="개인 상세용 요약 불릿")
@@ -206,11 +234,20 @@ class MemberOut(BaseModel):
         None,
         ge=0,
         le=100,
-        description="통합 엔진: 룰 정규화 점수와 DL의 고정 비율 블렌드(0.7/0.3).",
+        description="통합 엔진: rule_w·normalizedScore + dl_w·dl_score (dl_w는 신뢰도·불확실도·드리프트·검증 MAE로 동적).",
     )
     dl_top_factors: list[str] = Field(
         default_factory=list,
         description="DL 보조 점수에 영향 큰 요인(통합 피처 기준)",
+    )
+    instructor_freerider_override: str = Field(
+        "none",
+        description="요청에 담긴 교육자 무임승차 오버라이드(none|clear_suspicion|confirm_suspicion).",
+    )
+    instructor_override_note: str = Field("", description="요청에 담긴 오버라이드 사유 에코.")
+    freerider_override_effect_ko: str = Field(
+        "",
+        description="오버라이드가 플래그·위험도에 미친 영향 한 줄(없으면 빈 문자열).",
     )
 
 
@@ -502,6 +539,18 @@ def _attach_dl_to_members(
     request_id: str,
 ) -> tuple[list[MemberOut], dict[str, Any]]:
     """통합 리포트(`team_unified_eval`)와 동일 파이프라인으로 DL 보조 점수를 붙인다."""
+    if not req.use_deep_learning:
+        try:
+            from edu_tools.team_unified_eval import _dl_model_info_disabled_by_client
+
+            return members, _dl_model_info_disabled_by_client()
+        except Exception:
+            return members, {
+                "model_name": "disabled",
+                "enabled": False,
+                "reason": "client_disabled",
+            }
+
     try:
         from edu_tools.team_unified_eval import TeamUserIn, apply_dl_scores, run_score_engine
     except Exception:
@@ -523,7 +572,12 @@ def _attach_dl_to_members(
                 )
             )
         scores, _trust = run_score_engine(users)
-        dl_info = apply_dl_scores(users, scores, request_id=rid, learning=True)
+        dl_info = apply_dl_scores(
+            users,
+            scores,
+            request_id=rid,
+            learning=req.deep_learning_accumulate_samples,
+        )
         by_name = {s.member_name.strip(): s for s in scores}
         out: list[MemberOut] = []
         for mem in members:
@@ -989,6 +1043,95 @@ def _openai_feedbacks(req: TeamEvaluateRequest, members: list[MemberOut], api_ke
     return out
 
 
+def _sync_freerider_dl_layer(members: list[MemberOut]) -> list[MemberOut]:
+    """DL 병합 후 Rule `risk_level`·무임승차 플래그·신호 목록 정합."""
+    out: list[MemberOut] = []
+    for m in members:
+        rm = m.freerider_detection.rule_metrics
+        suspected_now = rm.risk_level == "suspected"
+        sigs = list(m.free_rider_signals)
+        note = (rm.dl_model_note or "").strip()
+        if rm.dl_model_freerider_support and note and note not in sigs:
+            sigs.insert(0, note)
+        fr_risk = float(m.free_rider_risk or 0.0)
+        if rm.dl_model_freerider_support:
+            fr_risk = max(fr_risk, 58.0)
+        out.append(
+            m.model_copy(
+                update={
+                    "free_rider_suspected": bool(m.free_rider_suspected or suspected_now),
+                    "free_rider_risk": fr_risk,
+                    "free_rider_signals": sigs[:14],
+                }
+            )
+        )
+    return out
+
+
+def _apply_instructor_freerider_overrides(
+    req: TeamEvaluateRequest, members: list[MemberOut]
+) -> list[MemberOut]:
+    """교육자 입력으로 화면용 무임승차 의심 플래그·위험도·신호를 조정. Rule 상세 리포트는 감사용으로 유지."""
+    out: list[MemberOut] = []
+    for i, m in enumerate(members):
+        mi = req.members[i] if i < len(req.members) else req.members[-1]
+        ov = mi.instructor_freerider_override
+        note = (mi.instructor_override_note or "").strip()[:500]
+        base_echo = {
+            "instructor_freerider_override": ov,
+            "instructor_override_note": note,
+        }
+        if ov == "none":
+            out.append(
+                m.model_copy(
+                    update={
+                        **base_echo,
+                        "freerider_override_effect_ko": "",
+                    }
+                )
+            )
+            continue
+
+        sigs = list(m.free_rider_signals)
+        if ov == "clear_suspicion":
+            suspected = False
+            risk = min(float(m.free_rider_risk), 22.0)
+            effect = (
+                "교육자 입력에 따라 화면용 무임승차 의심을 해제했습니다. "
+                "세부 Rule·DL 리포트는 자동 산출 그대로이며 면담·감사 시 함께 참고하세요."
+            )
+            prefix = "교육자 오버라이드(의심 해제)"
+            if note:
+                prefix += f": {note}"
+            if not any(prefix in s for s in sigs):
+                sigs.insert(0, prefix)
+        else:
+            suspected = True
+            risk = max(float(m.free_rider_risk), 62.0)
+            effect = (
+                "교육자 입력에 따라 무임승차 의심을 유지·강조했습니다. "
+                "최종 인사·성적 판단은 기관 규정에 따릅니다."
+            )
+            prefix = "교육자 오버라이드(의심 유지·강조)"
+            if note:
+                prefix += f": {note}"
+            if not any(prefix in s for s in sigs):
+                sigs.insert(0, prefix)
+
+        out.append(
+            m.model_copy(
+                update={
+                    **base_echo,
+                    "free_rider_suspected": suspected,
+                    "free_rider_risk": round(risk, 1),
+                    "free_rider_signals": sigs[:14],
+                    "freerider_override_effect_ko": effect,
+                }
+            )
+        )
+    return out
+
+
 def _finalize_members(
     req: TeamEvaluateRequest,
     base: list[MemberOut],
@@ -1015,28 +1158,36 @@ def _finalize_members(
             )
         )
 
-    n_sus = sum(1 for m in enriched if m.free_rider_suspected)
-    fr_summary = (
-        f"자동 탐지: 무임승차 의심 플래그 {n_sus}명. "
-        "표시는 통계·키워드 기반이며, 최종 판단은 교수·팀 면담으로 하세요."
-    )
-
     out_members, net, mm, anom, co_summary = _advanced_sync(req, enriched, suspected)
+
+    out_members, dl_model_info = _attach_dl_to_members(req, out_members, request_id)
 
     from edu_tools.team_freerider import (
         PRODUCT_TAGLINE_KO,
         build_team_dashboard,
         compute_freerider_reports,
+        merge_dl_freerider_signals,
         freerider_detection_overview,
         safe_freerider_ai_summaries,
     )
     from edu_tools.team_contest_layers import build_contest_layers
 
     fr_reports = compute_freerider_reports(req, out_members, timelines, net)
+    fr_reports = merge_dl_freerider_signals(out_members, fr_reports)
     out_members = [
         out_members[i].model_copy(update={"freerider_detection": fr_reports[i]})
         for i in range(len(out_members))
     ]
+    out_members = _sync_freerider_dl_layer(out_members)
+    out_members = _apply_instructor_freerider_overrides(req, out_members)
+    n_sus_final = sum(1 for m in out_members if m.free_rider_suspected)
+    n_ov = sum(1 for m in req.members if m.instructor_freerider_override != "none")
+    fr_summary = (
+        f"자동 탐지: 무임승차 의심 플래그 {n_sus_final}명. "
+        "Rule·DL 보조·키워드 기반이며, 최종 판단은 교수·팀 면담으로 하세요."
+    )
+    if n_ov:
+        fr_summary += f" 교육자 무임승차 오버라이드 반영 {n_ov}건."
     fr_overview = freerider_detection_overview(out_members)
 
     key = (os.environ.get("OPENAI_API_KEY") or "").strip()
@@ -1071,8 +1222,6 @@ def _finalize_members(
             out_members[i].model_copy(update={"ai_feedback": _template_feedback(out_members[i])})
             for i in range(len(out_members))
         ]
-
-    out_members, dl_model_info = _attach_dl_to_members(req, out_members, request_id)
 
     team_dashboard = build_team_dashboard(out_members)
     rubric_rep, trust_blk, risk_blk, improve_blk = build_contest_layers(req, out_members, net)

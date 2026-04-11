@@ -1,3 +1,9 @@
+사이트 주소·Docker·개발(5173) 정리: 저장소 루트 START.txt
+
+Linux/WSL 풀스택(Docker): RUN-LINUX.txt 참고.  ./scripts/stack-up.sh
+
+선택(Docker, Windows): 저장소 루트에서  powershell -ExecutionPolicy Bypass -File scripts\stack-up.ps1  (중지: scripts\stack-down.ps1)
+
 1) 백엔드: backend 폴더에서 uvicorn learning_analysis.main:app --host 127.0.0.1 --port 8000
 2) 프론트 빌드: frontend 폴더에서 npm run build  (→ ../frontend/dist)
 3) nginx: 저장소 루트에서  powershell -ExecutionPolicy Bypass -File nginx\start-nginx.ps1

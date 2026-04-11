@@ -8,7 +8,7 @@ import re
 from typing import Any
 
 from learning_analysis.llm_clients import (
-    ensure_gemini_configured,
+    gemini_generate_content,
     get_anthropic_client,
     get_openai_client,
     get_openai_xai_client,
@@ -58,20 +58,16 @@ def _fail(provider: str, model_label: str, err: str) -> ModelJudgment:
 
 
 def call_gemini(req: AnalyzeRequest, api_key: str) -> ModelJudgment:
-    import google.generativeai as genai
-
     model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-    ensure_gemini_configured(api_key)
-    model = genai.GenerativeModel(model_name=model_name, system_instruction=SYSTEM_KO)
     try:
-        res = model.generate_content(
+        text = gemini_generate_content(
+            api_key,
+            model_name,
             user_message(req),
-            generation_config={
-                "response_mime_type": "application/json",
-                "temperature": 0.2,
-            },
+            system_instruction=SYSTEM_KO,
+            response_mime_type="application/json",
+            temperature=0.2,
         )
-        text = (res.text or "").strip()
         data = _parse_json_from_text(text)
         return _to_judgment("gemini", model_name, data)
     except Exception as e:

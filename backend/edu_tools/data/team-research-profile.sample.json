@@ -1,0 +1,22 @@
+{
+  "source": {
+    "title": "예시: 소프트웨어 공학 팀프로젝트 협업 지표(가상·교육용)",
+    "doi": "10.0000/placeholder.example",
+    "year": 2023,
+    "cohort": "illustrative_only",
+    "license_note": "실제 논문 수치가 아닙니다. 공개 부록·논문 표에서 mean/std를 추출해 같은 키로 교체하세요."
+  },
+  "normative_on_features": {
+    "log_commits": { "mean": 2.4, "std": 0.85 },
+    "log_prs": { "mean": 1.1, "std": 0.55 },
+    "log_lines": { "mean": 6.2, "std": 1.1 },
+    "attendance_norm": { "mean": 0.78, "std": 0.12 },
+    "log_self_report_words": { "mean": 3.5, "std": 0.9 }
+  },
+  "integration": {
+    "enabled": false,
+    "blend_weight": 0.1,
+    "z_trim": 2.5,
+    "note_ko": "내부 피처 벡터 앞 5개(log_commits … log_self_report_words)와 동일 스케일의 평균·표준편차만 사용합니다. 활성화 시 z-정합 점수를 dl_score에 최대 blend_weight까지 혼합합니다."
+  }
+}

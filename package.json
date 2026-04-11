@@ -1,10 +1,17 @@
 {
   "name": "edusignal",
   "private": true,
-  "description": "EduSignal — 백엔드(FastAPI) + 프론트(Vite) 한 번에 실행",
+  "description": "EduSignal — local always-on service at :8000",
   "scripts": {
     "postinstall": "npm run install:all",
     "bootstrap": "npm install && npm run install:all",
+    "start": "npm run build:frontend && npm run serve:app",
+    "build:frontend": "cd frontend && npm run build",
+    "serve:app": "cd backend && python -m uvicorn learning_analysis.main:app --host 127.0.0.1 --port 8000",
+    "serve:app:reload": "cd backend && python -m uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000",
+    "always:on": "powershell -ExecutionPolicy Bypass -File scripts/install-always-on.ps1",
+    "always:off": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-always-on.ps1",
+    "always:status": "powershell -ExecutionPolicy Bypass -File scripts/always-on-status.ps1",
     "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:public": "concurrently -n api,web -c cyan,magenta \"npm run dev:backend:public\" \"npm run dev:frontend\"",
     "dev:backend": "cd backend && python -m uvicorn learning_analysis.main:app --reload --host 127.0.0.1 --port 8000",

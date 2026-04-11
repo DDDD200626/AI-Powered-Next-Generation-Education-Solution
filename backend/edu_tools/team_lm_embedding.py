@@ -44,7 +44,8 @@ def semantic_encoder_meta() -> dict[str, Any]:
         "extra_dims": LM_EXTRA_DIM,
         "note_ko": (
             "TEAM_SEMANTIC_ENCODER=1일 때 자기서술을 문장 임베딩으로 인코딩한 뒤 8개 구간 평균+tanh로 압축합니다. "
-            "0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다."
+            "0이면 해당 8차원은 0으로 채워 기존과 동일한 부담으로 동작합니다. "
+            "학습 시 과적합 완화는 team_torch_model 의 semantic_train_regularization·TEAM_SEMANTIC_AUTO_REG 를 참고하세요."
         ),
     }
 

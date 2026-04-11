@@ -1,0 +1,37 @@
+Linux 에서 풀스택 (권장: Docker — 컨테이너 안에서 nginx + 정적 프론트 + API 프록시)
+
+※ web 컨테이너는 API health 대기 없이 바로 떠서 8080 이 열립니다. API 가 준비 전이면
+  잠시 502 안내(502.html)가 보일 수 있음 — 새로고침.
+
+1) Docker Engine + Docker Compose 설치 (배포판 패키지 또는 https://docs.docker.com/engine/install/ )
+
+2) 저장소 루트에서:
+     chmod +x scripts/stack-up.sh
+     ./scripts/stack-up.sh
+
+   또는:
+     docker compose up --build -d
+
+3) 브라우저 주소창에 정확히 입력 (프로토콜 포함):
+     http://127.0.0.1:8080
+   원격 PC 에서 접속할 때는 서버의 LAN IP 로:
+     http://<서버IP>:8080
+
+4) 확인:
+     docker compose ps
+     docker compose logs -f web api
+
+5) 중지:
+     docker compose down
+   또는:
+     chmod +x scripts/stack-down.sh
+     ./scripts/stack-down.sh
+
+---
+
+선택) 호스트 OS 에 직접 nginx 를 쓰고 API 만 로컬에서 돌리는 경우
+
+  a) 프론트 빌드:  cd frontend && npm ci && npm run build
+  b) 백엔드:      cd backend && uvicorn learning_analysis.main:app --host 0.0.0.0 --port 8000
+  c) nginx 설정: nginx/linux/host-stock-predict.conf 를 열어 root 경로를 본인 clone 의 frontend/dist 로 맞춘 뒤,
+     sites-enabled 에 포함하거나 include 하고 nginx -t 후 systemctl reload nginx

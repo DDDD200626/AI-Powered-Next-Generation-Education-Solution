@@ -1,4 +1,5 @@
 import "./style.css";
+import connectionMlpWeights from "./connection_mlp_weights.json";
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
@@ -32,6 +33,130 @@ let healthPollHandle: number | null = null;
 /** 정상일 때도 주기 핑으로 프록시·탭 유휴 끊김 완화 */
 let healthKeepAliveHandle: number | null = null;
 
+/** `/api/health` 시도 이력 — 경량 MLP로 재시도·폴링 간격 조절 */
+interface HealthSample {
+  ok: boolean;
+  latencyMs: number | null;
+}
+
+const HEALTH_HISTORY_CAP = 24;
+const healthHistoryRing: HealthSample[] = [];
+/** 백엔드와 동일 가중치(`_connection_mlp_weights.json`) 기반 안정성 점수 0~1 */
+let lastConnectionStabilityScore: number | null = null;
+let lastConnectionCoachFetchAt = 0;
+const CONNECTION_COACH_MIN_INTERVAL_MS = 50_000;
+
+type ConnectionMlpWeights = {
+  "0.weight": number[][];
+  "0.bias": number[];
+  "2.weight": number[][];
+  "2.bias": number[];
+};
+
+const CM = connectionMlpWeights as ConnectionMlpWeights;
+
+function pushHealthSample(sample: HealthSample): void {
+  healthHistoryRing.push(sample);
+  while (healthHistoryRing.length > HEALTH_HISTORY_CAP) {
+    healthHistoryRing.shift();
+  }
+}
+
+function connectionFeaturesFromHistory(
+  samples: HealthSample[],
+  navigatorOnline: boolean,
+): number[] {
+  if (!samples.length) {
+    return [0, 0, 0, 0, 0, navigatorOnline ? 1 : 0];
+  }
+  const n = samples.length;
+  let fails = 0;
+  for (const s of samples) {
+    if (!s.ok) fails++;
+  }
+  const failRate = fails / n;
+  const lats: number[] = [];
+  for (const s of samples) {
+    if (s.ok && s.latencyMs != null) lats.push(s.latencyMs);
+  }
+  let meanLat: number;
+  let stdLat: number;
+  if (lats.length) {
+    meanLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+    const v = lats.reduce((a, x) => a + (x - meanLat) ** 2, 0) / lats.length;
+    stdLat = Math.sqrt(v);
+  } else {
+    meanLat = 2500;
+    stdLat = 400;
+  }
+  let consec = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    if (!samples[i].ok) consec++;
+    else break;
+  }
+  const consecN = Math.min(1, consec / 8);
+  let idxFromEnd: number | null = null;
+  for (let i = n - 1; i >= 0; i--) {
+    if (samples[i].ok) {
+      idxFromEnd = n - 1 - i;
+      break;
+    }
+  }
+  const tSinceSec =
+    idxFromEnd === null ? Math.min(180, n * 4) : Math.min(180, idxFromEnd * 3.5);
+  const tNorm = Math.min(1, tSinceSec / 180);
+  const nav = navigatorOnline ? 1 : 0;
+  return [failRate, meanLat / 2500, Math.min(1, stdLat / 800), consecN, tNorm, nav];
+}
+
+function mlpStabilityScore(vec6: number[]): number {
+  const w0 = CM["0.weight"];
+  const b0 = CM["0.bias"];
+  const w2 = CM["2.weight"][0];
+  const b2 = CM["2.bias"][0];
+  const h = w0.map((row, i) => {
+    let s = b0[i];
+    for (let j = 0; j < 6; j++) s += row[j] * vec6[j];
+    return Math.max(0, s);
+  });
+  let z = b2;
+  for (let j = 0; j < h.length; j++) z += w2[j] * h[j];
+  return 1 / (1 + Math.exp(-z));
+}
+
+function refreshConnectionScoreDisplay(): void {
+  lastConnectionStabilityScore = mlpStabilityScore(
+    connectionFeaturesFromHistory(healthHistoryRing, navigator.onLine),
+  );
+}
+
+/** MLP+Gemini `/api/connection/advise` — 연결 코치 문구(키 있으면 제미나이급 힌트) */
+async function maybeRefreshConnectionCoach(): Promise<void> {
+  if (!state.health) return;
+  const now = Date.now();
+  if (now - lastConnectionCoachFetchAt < CONNECTION_COACH_MIN_INTERVAL_MS) return;
+  lastConnectionCoachFetchAt = now;
+  try {
+    const samples = healthHistoryRing.map((s) => ({
+      ok: s.ok,
+      latency_ms: s.latencyMs,
+    }));
+    const r = await apiFetch("/api/connection/advise", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ samples, navigator_online: navigator.onLine }),
+      timeoutMs: 22_000,
+    });
+    if (!r.ok) return;
+    const j = (await r.json()) as { coach_brief_ko?: string | null };
+    if (typeof j.coach_brief_ko === "string" && j.coach_brief_ko.trim()) {
+      state.connectionCoachBrief = j.coach_brief_ko.trim();
+    }
+  } catch {
+    /* 네트워크 불안정 시 무시 */
+  }
+}
+
 function clearHealthPoll(): void {
   if (healthPollHandle != null) {
     window.clearInterval(healthPollHandle);
@@ -46,9 +171,13 @@ function ensureHealthPollIfNeeded(): void {
     return;
   }
   clearHealthPoll();
-  const everyMs = connectionUnstable ? 2500 : 5000;
+  const sc = lastConnectionStabilityScore ?? 0.5;
+  const everyMs =
+    sc < 0.4 ? 1100 : sc < 0.55 ? 1800 : connectionUnstable ? 2500 : 5000;
   healthPollHandle = window.setInterval(() => {
-    void refreshHealth(true).then(() => renderSync());
+    void refreshHealth(true).then((changed) => {
+      if (changed) renderSync();
+    });
   }, everyMs);
 }
 
@@ -56,8 +185,18 @@ function startHealthKeepAlive(): void {
   if (healthKeepAliveHandle != null) return;
   healthKeepAliveHandle = window.setInterval(() => {
     if (document.visibilityState !== "visible") return;
-    void refreshHealth(true).then(() => renderSync());
+    void refreshHealth(true).then((changed) => {
+      if (changed) renderSync();
+    });
   }, 30_000);
+}
+
+function healthVisualKey(): string {
+  const connected = !!state.health;
+  const unstable = connected && connectionUnstable;
+  const latency = lastHealthLatencyMs;
+  const degraded = connected && !unstable && latency != null && latency >= 1200;
+  return `${connected ? 1 : 0}|${unstable ? 1 : 0}|${degraded ? 1 : 0}`;
 }
 
 function sleepMs(ms: number): Promise<void> {
@@ -114,6 +253,8 @@ interface AnalyzeResponse {
   disclaimer: string;
 }
 
+type InstructorFreeriderOverride = "none" | "clear_suspicion" | "confirm_suspicion";
+
 interface TeamMemberRow {
   name: string;
   role: string;
@@ -130,6 +271,10 @@ interface TeamMemberRow {
   attendance: string;
   /** 주차별 활동(선택): 입력 시 타임라인에 반영 */
   timeline: { period_label: string; activity_score: string }[];
+  /** 교육자: 통합 평가(무임승차) 화면 플래그 덮어쓰기 — `POST /api/team/evaluate`에만 전달 */
+  instructor_freerider_override: InstructorFreeriderOverride;
+  /** 면담·감사 기록용 사유(선택) */
+  instructor_override_note: string;
 }
 
 interface TeamDimensionScores {
@@ -201,6 +346,9 @@ interface TeamMemberOut {
   contribution_type_label?: string;
   role_scores?: Record<string, number>;
   freerider_detection?: FreeriderDetectionReport;
+  instructor_freerider_override?: string;
+  instructor_override_note?: string;
+  freerider_override_effect_ko?: string;
 }
 
 interface NetworkNode {
@@ -335,7 +483,7 @@ interface TeamEvaluateResponse {
   disclaimer?: string;
 }
 
-/** POST /api/team/report — Score Engine → Anomaly → AI(설명) */
+/** POST /api/team/report — Rule·피처 → DL 보조 → 혼합 → Anomaly → AI(해설) */
 interface TeamUnifiedScoreBreakdown {
   commits: number;
   prs: number;
@@ -363,6 +511,12 @@ interface TeamUnifiedScoreResult {
   dl_confidence?: number;
   blendedScore?: number;
   dl_top_factors?: string[];
+  /** 외부 벤치마크 기대값 대비 정렬(학습 없이 추론) */
+  external_benchmark_score?: number;
+  /** 선택적 LLM 정렬(TEAM_DL_LLM_ASSIST=1, dl_score와 소폭 혼합) */
+  llm_alignment_score?: number;
+  /** 논문·연구 normative 분포 대비 z-정합(TEAM_RESEARCH_DATA_FILE) */
+  research_alignment_score?: number;
 }
 
 interface TeamUnifiedAnomaly {
@@ -391,6 +545,24 @@ interface TeamUnifiedReport {
   disclaimer: string;
   team_narrative?: string;
   ai_meta?: Record<string, unknown>;
+}
+
+/** 응답이 DL·ML 보조 경로를 탄 경우(클라이언트 끔 아님). */
+function isDlReport(rep: TeamUnifiedReport): boolean {
+  const m = rep.dl_model_info as { enabled?: boolean; model_name?: string; reason?: string } | undefined;
+  if (!m) return false;
+  if (m.enabled === false) return false;
+  if (m.model_name === "disabled") return false;
+  if (m.reason === "client_disabled") return false;
+  return true;
+}
+
+function avgDlConfidence(rep: TeamUnifiedReport): number | null {
+  const vals = rep.scores
+    .map((s) => s.dl_confidence)
+    .filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
 }
 
 interface PromotionGateInfo {
@@ -508,7 +680,41 @@ function emptyTeamMember(): TeamMemberRow {
       emptyTimelineRow(),
       emptyTimelineRow(),
     ],
+    instructor_freerider_override: "none",
+    instructor_override_note: "",
   };
+}
+
+function parseInstructorFreeriderOverride(raw: string): InstructorFreeriderOverride {
+  if (raw === "clear_suspicion" || raw === "confirm_suspicion") return raw;
+  return "none";
+}
+
+function parseCollaborationEdgesForEvaluate(
+  raw: string,
+): Array<{ source: string; target: string; weight: number }> {
+  const t = raw.trim();
+  if (!t) return [];
+  try {
+    const arr = JSON.parse(t) as unknown;
+    if (!Array.isArray(arr)) return [];
+    const out: Array<{ source: string; target: string; weight: number }> = [];
+    for (const e of arr) {
+      if (!e || typeof e !== "object") continue;
+      const o = e as Record<string, unknown>;
+      const source = String(o.source ?? "").trim();
+      const target = String(o.target ?? "").trim();
+      if (!source || !target) continue;
+      let weight = 5;
+      if (typeof o.weight === "number" && Number.isFinite(o.weight)) {
+        weight = Math.min(100, Math.max(0, o.weight));
+      }
+      out.push({ source, target, weight });
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** 데모용 샘플 팀 데이터 */
@@ -596,6 +802,8 @@ const state: {
   loading: boolean;
   error: string | null;
   health: BackendHealth | null;
+  /** `/api/connection/advise` — MLP+선택 Gemini 한국어 코치 */
+  connectionCoachBrief: string | null;
   team: {
     project_name: string;
     project_description: string;
@@ -612,6 +820,14 @@ const state: {
     what_if: WhatIfInput;
     recheck_loading: boolean;
     recheck_result: TeamRecheckResult | null;
+    /** POST /api/team/evaluate — 무임승차·루브릭·교육자 오버라이드 반영 */
+    holistic: TeamEvaluateResponse | null;
+    holistic_loading: boolean;
+    holistic_error: string | null;
+    /** POST /api/team/report — PyTorch·ML 보조 점수 사용 */
+    use_deep_learning: boolean;
+    /** 학습 풀에 이번 입력 누적(재학습 트리거). false면 추론만 */
+    deep_learning_accumulate_samples: boolean;
     loading: boolean;
     error: string | null;
   };
@@ -672,6 +888,7 @@ const state: {
   loading: false,
   error: null,
   health: null,
+  connectionCoachBrief: null,
   team: {
     project_name: "",
     project_description: "",
@@ -687,6 +904,11 @@ const state: {
     what_if: { member_name: "", add_commits: 0, add_prs: 0, add_lines: 0 },
     recheck_loading: false,
     recheck_result: null,
+    holistic: null,
+    holistic_loading: false,
+    holistic_error: null,
+    use_deep_learning: true,
+    deep_learning_accumulate_samples: true,
     loading: false,
     error: null,
   },
@@ -756,6 +978,8 @@ function scheduleTeamDraftSave(): void {
         evaluation_criteria: state.team.evaluation_criteria,
         collaboration_edges_json: state.team.collaboration_edges_json,
         members: state.team.members,
+        use_deep_learning: state.team.use_deep_learning,
+        deep_learning_accumulate_samples: state.team.deep_learning_accumulate_samples,
       };
       localStorage.setItem(TEAM_DRAFT_KEY, JSON.stringify(payload));
     } catch {
@@ -787,6 +1011,8 @@ function hydrateTeamDraftIfEmpty(): void {
       evaluation_criteria?: string;
       collaboration_edges_json?: string;
       members?: TeamMemberRow[];
+      use_deep_learning?: boolean;
+      deep_learning_accumulate_samples?: boolean;
     };
     if (typeof d.project_name === "string") state.team.project_name = d.project_name;
     if (typeof d.project_description === "string") state.team.project_description = d.project_description;
@@ -798,6 +1024,10 @@ function hydrateTeamDraftIfEmpty(): void {
         ...m,
         timeline: m.timeline?.length ? m.timeline : emptyTeamMember().timeline,
       }));
+    }
+    if (typeof d.use_deep_learning === "boolean") state.team.use_deep_learning = d.use_deep_learning;
+    if (typeof d.deep_learning_accumulate_samples === "boolean") {
+      state.team.deep_learning_accumulate_samples = d.deep_learning_accumulate_samples;
     }
   } catch {
     /* ignore */
@@ -876,6 +1106,9 @@ function buildTeamEvidencePackage(res: TeamUnifiedReport): Record<string, unknow
     request_id: (res.evaluation_log as { request_id?: string })?.request_id ?? null,
     judge_criteria_scores: judge,
     judge_comments,
+    dl_prior_calibration: (res.dl_model_info as { prior_calibration?: unknown } | undefined)?.prior_calibration ?? null,
+    web_priors_meta: (res.dl_model_info as { web_priors?: unknown } | undefined)?.web_priors ?? null,
+    benchmark_inference: (res.dl_model_info as { benchmark_inference?: unknown } | undefined)?.benchmark_inference ?? null,
     judge_criteria_rationale: {
       input_metrics: {
         average_normalized_score: Number(avgNorm.toFixed(2)),
@@ -902,45 +1135,66 @@ function buildTeamEvidencePackage(res: TeamUnifiedReport): Record<string, unknow
   };
 }
 
-async function refreshHealth(force = false): Promise<void> {
+async function refreshHealth(force = false): Promise<boolean> {
+  const before = healthVisualKey();
   const now = Date.now();
-  if (!force && state.health && !connectionUnstable && now - lastHealthFetchedAt < HEALTH_CACHE_MS) return;
-  if (!force && !state.health && !connectionUnstable && now - lastHealthAttemptAt < HEALTH_RETRY_MS) return;
+  if (!force && state.health && !connectionUnstable && now - lastHealthFetchedAt < HEALTH_CACHE_MS) return false;
+  if (!force && !state.health && !connectionUnstable && now - lastHealthAttemptAt < HEALTH_RETRY_MS) return false;
   lastHealthAttemptAt = now;
 
-  for (let attempt = 0; attempt < HEALTH_FETCH_ATTEMPTS; attempt++) {
+  const snapshot = healthHistoryRing.slice();
+  const startScore = mlpStabilityScore(
+    connectionFeaturesFromHistory(snapshot, navigator.onLine),
+  );
+  const maxAttempts =
+    startScore < 0.38 ? 12 : startScore < 0.52 ? 8 : HEALTH_FETCH_ATTEMPTS;
+  const backoffBase = startScore < 0.42 ? 320 : 600;
+  const backoffGrow = startScore < 0.42 ? 1.38 : 1.55;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const t0 = performance.now();
     try {
       const r = await apiFetch("/api/health", { timeoutMs: HEALTH_ATTEMPT_TIMEOUT_MS });
       lastHealthLatencyMs = Math.max(0, Math.round(performance.now() - t0));
       lastHealthCheckedAt = Date.now();
       if (r.ok) {
-        state.health = (await r.json()) as BackendHealth;
+        const body = (await r.json()) as BackendHealth;
+        pushHealthSample({ ok: true, latencyMs: lastHealthLatencyMs });
+        state.health = body;
         lastHealthFetchedAt = Date.now();
         lastSuccessfulHealthAt = Date.now();
         connectionUnstable = false;
+        refreshConnectionScoreDisplay();
+        void maybeRefreshConnectionCoach().then((_) => renderSync());
         clearHealthPoll();
-        return;
+        return before !== healthVisualKey();
       }
+      pushHealthSample({ ok: false, latencyMs: null });
+      lastHealthLatencyMs = null;
     } catch {
       lastHealthLatencyMs = null;
       lastHealthCheckedAt = Date.now();
+      pushHealthSample({ ok: false, latencyMs: null });
     }
-    if (attempt < HEALTH_FETCH_ATTEMPTS - 1) {
-      await sleepMs(600 * Math.pow(1.55, attempt));
+    if (attempt < maxAttempts - 1) {
+      await sleepMs(backoffBase * Math.pow(backoffGrow, attempt));
     }
   }
+
+  refreshConnectionScoreDisplay();
 
   const tFail = Date.now();
   const sticky = state.health != null && tFail - lastSuccessfulHealthAt < HEALTH_STICKY_MS;
   if (sticky) {
     connectionUnstable = true;
     ensureHealthPollIfNeeded();
-    return;
+    return before !== healthVisualKey();
   }
   state.health = null;
+  state.connectionCoachBrief = null;
   connectionUnstable = false;
   ensureHealthPollIfNeeded();
+  return before !== healthVisualKey();
 }
 
 async function submitAnalyze(): Promise<void> {
@@ -1017,8 +1271,16 @@ function readTeamForm(): void {
       period_label: g(`tm_tl_p_${i}_${j}`)?.value ?? "",
       activity_score: g(`tm_tl_s_${i}_${j}`)?.value ?? "",
     })),
+    instructor_freerider_override: parseInstructorFreeriderOverride(
+      (g(`tm_fr_override_${i}`) as HTMLSelectElement | null)?.value ?? "none",
+    ),
+    instructor_override_note: g(`tm_fr_note_${i}`)?.value?.trim().slice(0, 500) ?? "",
   }));
   state.team.collaboration_edges_json = g("team_collaboration_edges")?.value ?? "";
+  const dlEl = g("team_use_dl") as HTMLInputElement | null;
+  const accEl = g("team_dl_accumulate") as HTMLInputElement | null;
+  if (dlEl) state.team.use_deep_learning = !!dlEl.checked;
+  if (accEl) state.team.deep_learning_accumulate_samples = !!accEl.checked;
 }
 
 async function submitTeam(): Promise<void> {
@@ -1028,7 +1290,15 @@ async function submitTeam(): Promise<void> {
   state.team.loading = true;
   renderSync();
 
-  const buildBody = (): { body: { project_name: string; teamData: Array<Record<string, unknown>> } | null; error?: string } => {
+  const buildBody = (): {
+    body: {
+      project_name: string;
+      teamData: Array<Record<string, unknown>>;
+      use_deep_learning: boolean;
+      deep_learning_accumulate_samples: boolean;
+    } | null;
+    error?: string;
+  } => {
     const rows = state.team.members.filter((m) => m.name.trim());
     const teamData = rows.map((m) => {
       const att = parseOptFloat(m.attendance);
@@ -1053,6 +1323,9 @@ async function submitTeam(): Promise<void> {
       body: {
         project_name: state.team.project_name.trim(),
         teamData,
+        use_deep_learning: state.team.use_deep_learning,
+        deep_learning_accumulate_samples:
+          state.team.use_deep_learning && state.team.deep_learning_accumulate_samples,
       },
     };
   };
@@ -1081,6 +1354,8 @@ async function submitTeam(): Promise<void> {
       return;
     }
     state.team.report = data;
+    state.team.holistic = null;
+    state.team.holistic_error = null;
     state.team.recheck_result = null;
     void fetchTeamTrends();
     void fetchTeamModelMonitor();
@@ -1091,6 +1366,85 @@ async function submitTeam(): Promise<void> {
     state.team.loading = false;
   }
   renderSync();
+}
+
+async function submitTeamHolistic(): Promise<void> {
+  readTeamForm();
+  state.team.holistic_error = null;
+  state.team.holistic = null;
+  state.team.holistic_loading = true;
+  renderSync();
+
+  const rows = state.team.members.filter((m) => m.name.trim());
+  if (!state.team.project_name.trim() || rows.length === 0) {
+    state.team.holistic_error = "프로젝트명과 최소 한 명의 이름을 입력하세요.";
+    state.team.holistic_loading = false;
+    renderSync();
+    return;
+  }
+
+  const members = rows.map((m) => {
+    const timeline: Array<{ period_label: string; activity_score: number }> = [];
+    for (const row of m.timeline ?? []) {
+      const pl = (row.period_label ?? "").trim();
+      const sc = parseOptFloat(row.activity_score ?? "");
+      if (pl && sc != null) {
+        timeline.push({
+          period_label: pl,
+          activity_score: Math.min(100, Math.max(0, sc)),
+        });
+      }
+    }
+    const oc = parseOptFloat(m.outcome_score);
+    const base: Record<string, unknown> = {
+      name: m.name.trim(),
+      role: (m.role ?? "").trim(),
+      commits: parseOptInt(m.commits) ?? 0,
+      pull_requests: parseOptInt(m.pull_requests) ?? 0,
+      lines_changed: parseOptInt(m.lines_changed) ?? 0,
+      tasks_completed: parseOptInt(m.tasks_completed) ?? 0,
+      meetings_attended: parseOptInt(m.meetings_attended) ?? 0,
+      self_report: m.self_report ?? "",
+      peer_notes: m.peer_notes ?? "",
+      timeline,
+      instructor_freerider_override: m.instructor_freerider_override,
+      instructor_override_note: m.instructor_override_note ?? "",
+    };
+    if (oc != null) base.outcome_score = Math.min(100, Math.max(0, oc));
+    return base;
+  });
+
+  const body = {
+    project_name: state.team.project_name.trim(),
+    project_description: state.team.project_description.trim(),
+    evaluation_criteria: state.team.evaluation_criteria.trim(),
+    members,
+    collaboration_edges: parseCollaborationEdgesForEvaluate(state.team.collaboration_edges_json),
+    use_deep_learning: state.team.use_deep_learning,
+    deep_learning_accumulate_samples:
+      state.team.use_deep_learning && state.team.deep_learning_accumulate_samples,
+  };
+
+  try {
+    const r = await apiFetch("/api/team/evaluate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json()) as TeamEvaluateResponse & { detail?: unknown };
+    if (!r.ok) {
+      const d = data.detail;
+      state.team.holistic_error =
+        typeof d === "string" ? d : Array.isArray(d) ? JSON.stringify(d) : "통합 평가 요청 실패";
+      return;
+    }
+    state.team.holistic = data;
+  } catch (e) {
+    state.team.holistic_error = e instanceof Error ? e.message : String(e);
+  } finally {
+    state.team.holistic_loading = false;
+    renderSync();
+  }
 }
 
 async function runTeamRecheck(): Promise<void> {
@@ -1127,6 +1481,9 @@ async function runTeamRecheck(): Promise<void> {
   const body = {
     project_name: state.team.project_name.trim(),
     teamData,
+    use_deep_learning: state.team.use_deep_learning,
+    deep_learning_accumulate_samples:
+      state.team.use_deep_learning && state.team.deep_learning_accumulate_samples,
   };
 
   try {
@@ -1285,7 +1642,7 @@ function teamTrendHtml(): string {
         <path d="${pBlend}" class="trend-line trend-line--blend"></path>
       </svg>
       <p class="muted small">${escapeHtml(trendInsight(pts))}</p>`
-        : `<p class="muted small">추세 데이터가 아직 충분하지 않습니다. 팀 평가를 누적 실행하면 그래프가 표시됩니다.</p>`
+        : `<p class="muted small">추세 데이터가 아직 충분하지 않습니다. 팀 DL 평가를 누적 실행하면 그래프가 표시됩니다.</p>`
     }
   </section>`;
 }
@@ -1319,7 +1676,12 @@ function confidenceGateHtml(rep: TeamUnifiedReport): string {
   const avgTrust = trustVals.length ? trustVals.reduce((a, b) => a + b, 0) / trustVals.length : 0;
   const anomalyCount = (rep.anomalies || []).reduce((a, x) => a + (x.flags?.length || 0), 0);
   const dataPoints = rep.scores.length;
-  const confidence = Math.max(0, Math.min(100, avgTrust - anomalyCount * 2 + Math.min(10, dataPoints * 1.5)));
+  const dlMode = isDlReport(rep);
+  const adc = avgDlConfidence(rep);
+  const confidence = Math.max(
+    0,
+    Math.min(100, avgTrust - anomalyCount * 2 + Math.min(10, dataPoints * 1.5) + (dlMode && adc != null && adc >= 55 ? 3 : 0)),
+  );
   const level = confidence >= 75 ? "HIGH" : confidence >= 55 ? "MEDIUM" : "LOW";
   const guide =
     level === "HIGH"
@@ -1328,10 +1690,15 @@ function confidenceGateHtml(rep: TeamUnifiedReport): string {
         ? "중간 신뢰도: 협업 근거(PR/리뷰/출석) 데이터를 추가하면 결과 안정성이 향상됩니다."
         : "낮은 신뢰도: 데이터가 부족하거나 이상 플래그가 많습니다. 입력 보강 후 재평가를 권장합니다.";
   const cls = level === "HIGH" ? "pill-on" : level === "MEDIUM" ? "pill-muted" : "pill-warn";
+  const dlHint =
+    dlMode && adc != null
+      ? `<p class="muted small">DL 모델 평균 신뢰도(입력 밀도·불확실도 반영) <strong>${adc.toFixed(1)}</strong> / 100</p>`
+      : "";
   return `
   <section class="panel hud-panel">
     <h3 class="subh">평가 신뢰도 게이트</h3>
     <p><span class="pill ${cls}">${level}</span> <strong class="score-num">${confidence.toFixed(1)}</strong> / 100</p>
+    ${dlHint}
     <p class="muted small">${escapeHtml(guide)}</p>
   </section>`;
 }
@@ -1360,6 +1727,12 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
   const dl = rep.dl_model_info as
     | {
         quality?: {
+          dl_quality_unified?: {
+            training_regularization?: {
+              semantic_embedding?: Record<string, unknown> | null;
+              note_ko?: string;
+            };
+          };
           semantic_encoder?: { enabled?: boolean; model_id?: string | null; note_ko?: string };
           operations_playbook?: {
             recommendation_level?: string;
@@ -1377,7 +1750,27 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
   const pb = dl?.quality?.operations_playbook;
   const ex = dl?.quality?.explainability_snapshot;
   const sem = dl?.quality?.semantic_encoder;
-  if (!pb && !ex && !sem) return "";
+  const trPack = dl?.quality?.dl_quality_unified?.training_regularization;
+  const trSem = trPack?.semantic_embedding;
+  const trLine =
+    trSem && typeof trSem === "object"
+      ? (() => {
+          const dp = trSem.dropout_block_p;
+          const sc = trSem.scale_on_embedding_dims;
+          const auto = trSem.auto_reg_default;
+          const slice = trSem.feature_slice;
+          const bits: string[] = [];
+          if (typeof dp === "number") bits.push(`블록 드롭아웃 p≈${dp}`);
+          if (typeof sc === "number") bits.push(`스케일≈${sc}`);
+          if (auto === true) bits.push("자동 완화 적용");
+          if (typeof slice === "string") bits.push(`슬라이스 ${slice}`);
+          return bits.length
+            ? `<p class="muted small"><strong>의미 차원 학습 규제</strong> ${escapeHtml(bits.join(" · "))}</p>`
+            : "";
+        })()
+      : "";
+  const trPackNote = trPack?.note_ko ? `<p class="muted small">${escapeHtml(trPack.note_ko)}</p>` : "";
+  if (!pb && !ex && !sem && !trLine && !trPackNote) return "";
   const lvl = (pb?.recommendation_level || "ok").toLowerCase();
   const pill =
     lvl === "action" ? "pill-warn" : lvl === "watch" ? "pill-muted" : "pill-on";
@@ -1411,6 +1804,8 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
   return `
   <section class="panel hud-panel">
     <h3 class="subh">DL 설명 · 운영 권고</h3>
+    ${trLine}
+    ${trPackNote}
     ${semLine}
     ${
       pb
@@ -1422,6 +1817,67 @@ function dlExplainOpsPanelHtml(rep: TeamUnifiedReport): string {
     ${noise}
     ${permHtml}
     ${ex?.note_ko ? `<p class="muted small">${escapeHtml(ex.note_ko)}</p>` : ""}
+  </section>`;
+}
+
+function priorCalibrationPanelHtml(rep: TeamUnifiedReport): string {
+  if (!isDlReport(rep) || !rep.dl_model_info) return "";
+  const raw = rep.dl_model_info as Record<string, unknown>;
+  const pc = raw.prior_calibration as
+    | {
+        delta_stats?: { min?: number | null; max?: number | null; mean?: number | null; abs_max?: number | null };
+        note_ko?: string;
+        adjustment?: { prior_strength?: number; max_delta?: number; gap_weights?: Record<string, number> };
+      }
+    | undefined;
+  const wp = raw.web_priors as
+    | {
+        source?: string;
+        enabled?: boolean;
+        url?: string;
+        local_path?: string;
+        fetched_at?: number;
+      }
+    | undefined;
+  const ext =
+    !!wp?.enabled ||
+    (wp?.source != null && wp.source !== "local-default") ||
+    !!wp?.url ||
+    !!wp?.local_path;
+  const stats = pc?.delta_stats;
+  const mean = stats?.mean;
+  const absMax = stats?.abs_max;
+  const statLine =
+    mean != null && Number.isFinite(Number(mean))
+      ? `이번 요청 DL 보정(Δ): 평균 ${Number(mean).toFixed(2)}점 · |최대| ${absMax != null && Number.isFinite(Number(absMax)) ? Number(absMax).toFixed(2) : "—"}`
+      : "";
+  const srcBits: string[] = [];
+  if (wp?.source) srcBits.push(`출처 ${wp.source}`);
+  if (wp?.local_path) srcBits.push(`파일 ${wp.local_path}`);
+  if (wp?.url) srcBits.push("원격 URL");
+  const srcLine = srcBits.length ? srcBits.join(" · ") : "";
+  const str = pc?.adjustment?.prior_strength;
+  const strengthLine =
+    str != null && Number.isFinite(Number(str))
+      ? `적용 prior_strength(환경 배수 반영 후): ${Number(str).toFixed(2)}`
+      : "";
+  const note = pc?.note_ko ? `<p class="muted small prior-cal-note">${escapeHtml(pc.note_ko)}</p>` : "";
+  const bi = raw.benchmark_inference as { enabled?: boolean; blend_weight?: number; note_ko?: string } | undefined;
+  const benchBlock =
+    bi?.enabled === true
+      ? `<p class="muted small"><strong>외부 정렬 혼합</strong> · blend ${bi.blend_weight != null ? Number(bi.blend_weight).toFixed(2) : "—"} (NN <code class="mono-input">dl_score</code>와 외부 기대값 정렬 점수 혼합, 추가 학습 불필요)</p>${
+          bi.note_ko ? `<p class="muted small prior-cal-note">${escapeHtml(bi.note_ko)}</p>` : ""
+        }`
+      : `<p class="muted small">외부 정렬 혼합: 꺼짐 — JSON <code class="mono-input">benchmark_inference.enabled</code> 또는 <code class="mono-input">TEAM_BENCHMARK_INFERENCE_ENABLED=1</code></p>`;
+  return `
+  <section class="panel hud-panel prior-cal-panel" aria-labelledby="prior-cal-title">
+    <h3 id="prior-cal-title" class="subh">외부·벤치마크 priors 보정</h3>
+    ${benchBlock}
+    <p class="muted small">${ext ? "승인된 JSON(로컬 파일 또는 단일 URL)의 기대값을 반영했습니다." : "기본 기대값만 사용 중입니다. 서버에 <code class=\"mono-input\">TEAM_WEB_PRIORS_FILE</code> 또는 <code class=\"mono-input\">TEAM_WEB_PRIORS_URL</code> 을 설정하면 여기에 요약됩니다."}</p>
+    ${statLine ? `<p class="muted small"><strong>${escapeHtml(statLine)}</strong></p>` : ""}
+    ${strengthLine ? `<p class="muted small">${escapeHtml(strengthLine)} · max_delta ${pc?.adjustment?.max_delta != null ? escapeHtml(String(pc.adjustment.max_delta)) : "—"}</p>` : ""}
+    ${srcLine ? `<p class="muted small mono-input prior-cal-src">${escapeHtml(srcLine)}</p>` : ""}
+    ${note}
   </section>`;
 }
 
@@ -1722,32 +2178,60 @@ function connectionStripHtml(): string {
         : status === "DEGRADED"
           ? "프론트 ↔ 백엔드 연결(지연)"
           : "프론트 ↔ 백엔드 미연결";
+  const offlineHint =
+    status === "OFFLINE"
+      ? ` <span class="muted small">백엔드가 꺼져 있으면 PC에서 <code class="mono-input">npm run always:on</code> 한 번 설치·실행하면 부팅 후에도 :8000이 자동으로 다시 뜹니다.</span>`
+      : "";
   const checked = lastHealthCheckedAt ? new Date(lastHealthCheckedAt).toLocaleTimeString() : "-";
   const latencyTxt = latency != null ? `${latency}ms` : "-";
   return `
   <div class="${stripClass}" role="status" aria-live="polite">
     <div class="conn-strip-inner">
-      <span class="${dotClass}" aria-hidden="true"></span>
-      <span class="conn-msg"><strong>${status}</strong> · ${mainMsg}</span>
-      <span class="conn-code">응답 ${latencyTxt} · 확인 ${checked}</span>
+      <ul class="conn-strip-list" aria-label="백엔드 연결 상태">
+        <li class="conn-strip-item conn-strip-item--main">
+          <span class="${dotClass}" aria-hidden="true"></span>
+          <span class="conn-msg"><strong>${status}</strong> · ${mainMsg}${offlineHint}</span>
+        </li>
+        <li class="conn-strip-item conn-strip-item--meta">
+          <span class="conn-code">응답 ${latencyTxt} · 확인 ${checked}${
+            lastConnectionStabilityScore != null
+              ? ` · DL연결 ${Math.round(lastConnectionStabilityScore * 100)}%`
+              : ""
+          }</span>
+        </li>
+        ${
+          state.connectionCoachBrief
+            ? `<li class="conn-strip-item conn-strip-item--coach" aria-label="연결 코치"><span class="conn-coach">${escapeHtml(state.connectionCoachBrief)}</span></li>`
+            : ""
+        }
+        <li class="conn-strip-item conn-strip-item--links" aria-label="API 바로가기">
+          <a class="conn-strip-api" href="${escapeHtml(apiUrl("/api/capabilities"))}" target="_blank" rel="noopener noreferrer">capabilities</a>
+          <span class="conn-strip-sep" aria-hidden="true">·</span>
+          <a class="conn-strip-api" href="${escapeHtml(apiUrl("/api/observability"))}" target="_blank" rel="noopener noreferrer">observability</a>
+          <span class="conn-strip-sep" aria-hidden="true">·</span>
+          <a class="conn-strip-api" href="${escapeHtml(apiUrl("/api/health"))}" target="_blank" rel="noopener noreferrer">health</a>
+        </li>
+      </ul>
     </div>
   </div>`;
 }
 
 function navHtml(): string {
   const cur = (v: SiteView) => (state.view === v ? "nav-link active" : "nav-link");
+  const hubSection: SiteView[] = ["hub", "analyze", "at-risk", "feedback", "rubric"];
+  const hubCurrent = hubSection.includes(state.view);
   return `
   <header class="site-header site-header--glass">
     <div class="nav-inner">
-      <a href="#/" class="brand brand-mark" data-view="home" aria-label="팀 프로젝트 기여도 평가 — 홈">
+      <a href="#/" class="brand brand-mark" data-view="home" aria-label="DL 팀 기여도 평가 — 홈">
         <span class="brand-glow" aria-hidden="true"></span>
-        <span class="brand-title">팀 공정 평가</span>
-        <span class="brand-tag">기여도 자동 산출</span>
+        <span class="brand-title">팀 기여도</span>
+        <span class="brand-tag brand-tag--dl">Rule / DL</span>
       </a>
       <nav class="nav" aria-label="주요 메뉴">
-        <button type="button" class="${cur("home")}" data-view="home">홈</button>
-        <button type="button" class="${cur("team")}" data-view="team">팀 평가</button>
-        <button type="button" class="${cur("hub")}" data-view="hub">부가 분석</button>
+        <button type="button" class="${cur("home")}" data-view="home"${state.view === "home" ? ' aria-current="page"' : ""}>개요</button>
+        <button type="button" class="${cur("team")}" data-view="team"${state.view === "team" ? ' aria-current="page"' : ""}>팀 평가</button>
+        <button type="button" class="${cur("hub")}" data-view="hub"${hubCurrent ? ' aria-current="page"' : ""}>부가</button>
       </nav>
     </div>
   </header>`;
@@ -1755,6 +2239,7 @@ function navHtml(): string {
 
 function footerHtml(): string {
   const docsHref = API_BASE ? `${API_BASE}/docs` : "/docs";
+  const capHref = apiUrl("/api/capabilities");
   const openApiLink =
     state.health?.version != null
       ? `<a href="${escapeHtml(docsHref)}" target="_blank" rel="noopener noreferrer">OpenAPI ${escapeHtml(state.health.version)}</a>`
@@ -1764,46 +2249,116 @@ function footerHtml(): string {
     <div class="footer-inner">
       <p class="footer-line">
         ${openApiLink}
+        · <a href="${escapeHtml(capHref)}" target="_blank" rel="noopener noreferrer">capabilities</a>
         · 교육 보조 도구이며 징계·단정에 사용할 수 없습니다.
       </p>
-      <p class="footer-muted">팀 프로젝트 기여도 자동 평가 시스템 — 교육 보조·참고용</p>
+      <p class="footer-muted">교육·참고용 · 최종 판단은 사람이 합니다</p>
     </div>
   </footer>`;
 }
 
 function homeHtml(): string {
   return `
-  <div class="page page-animate home-page">
+  <div class="page home-page home-page--dl">
     <section class="hero-block home-hero-main home-hero-visual">
       <div class="hero-orb hero-orb--a" aria-hidden="true"></div>
       <div class="hero-orb hero-orb--b" aria-hidden="true"></div>
-      <p class="eyebrow eyebrow--shine">교육 보조 · 참고용</p>
-      <h1 class="home-headline home-headline--fx">팀 프로젝트 기여도 자동 평가</h1>
+      <p class="eyebrow">Contribution · reference only</p>
+      <h1 class="home-headline home-headline--fx">팀 기여도: Rule 피처와 학습 모델을 함께 씁니다</h1>
       <p class="hero-text home-lead">
-        Git·활동 지표를 바탕으로 기여를 정리하고, 무임승차 의심·협업 네트워크 등을 참고용으로 제시합니다.
-        최종 성적·징계 판단을 대체하지 않습니다.
+        저장소·활동 지표로 정규화 점수를 만들고, 서버에 올라간 가중치(PyTorch 또는 선형)로 보조 점수를 얻습니다. 둘을 신뢰도에 따라 혼합한 뒤 이상·무임승차·리포트로 넘깁니다.
+        자연어 총평은 선택적 LLM 호출로만 붙습니다.
       </p>
       <div class="pill-row hero-pills">
-        <span class="pill pill-on">기여 지수</span>
-        <span class="pill pill-on">이상·무임승차 탐지</span>
-        <span class="pill pill-on">선택적 LLM 해설</span>
-        <span class="pill pill-muted">과정–시험·이탈 등 부가 분석</span>
+        <span class="pill pill-on">tabular + DL</span>
+        <span class="pill pill-on">blended score</span>
+        <span class="pill pill-on">audit / export</span>
+        <span class="pill pill-muted">기타: 과정·시험·이탈</span>
       </div>
-      <p class="row-actions" style="margin-top:1.25rem;">
-        <button type="button" class="btn btn-primary" data-view="team">팀 평가 시작</button>
-        <button type="button" class="btn btn-ghost" data-view="hub">부가 분석 도구</button>
+      <p class="row-actions row-actions--hero">
+        <button type="button" class="btn btn-primary" data-view="team">평가 실행</button>
+        <button type="button" class="btn btn-ghost" data-view="hub">부가 도구</button>
       </p>
-      <p class="muted small home-lead">OpenAPI 연동 · 로컬 또는 Docker로 실행</p>
+      <p class="muted small home-lead">API <code class="mono-input">POST /api/team/report</code> — 동일 스키마로 UI·스크립트 연동</p>
+    </section>
+
+    <section class="panel hud-panel home-dl-pipeline" aria-labelledby="home-pipeline-title">
+      <h2 id="home-pipeline-title" class="section-title section-title--compact">서버 처리 순서</h2>
+      <p class="muted small home-section-lead">한 요청당 대략 아래 순서입니다. GPU는 필수 아님.</p>
+      <ol class="home-dl-pipeline__list">
+        <li><strong>입력</strong> 커밋·PR·라인·출석·자기서술·타임라인·협업 간선</li>
+        <li><strong>Rule·피처</strong> 팀 내 정규화·순위·신뢰도 벡터</li>
+        <li><strong>딥러닝</strong> PyTorch MLP(또는 선형 폴백)로 <code class="mono-input">dl_score</code>·불확실도</li>
+        <li><strong>혼합·판단</strong> 동적 가중으로 <code class="mono-input">blendedScore</code>·이상·무임승차 플래그</li>
+        <li><strong>리포트</strong> JSON·추세·(선택) LLM 해설</li>
+      </ol>
+    </section>
+
+    <section class="section-block hud-section home-section-dense" aria-labelledby="home-features-title">
+      <h2 id="home-features-title" class="section-title">화면</h2>
+      <p class="muted small home-section-lead">메인은 팀 평가 한 화면. 나머지는 같은 API 뒤의 부가 화면입니다.</p>
+      <div class="solution-grid home-feature-grid">
+        <article class="solution-tile solution-tile--live hud-card home-feature-grid__primary">
+          <span class="solution-badge solution-badge--on">Main</span>
+          <h3>팀 평가</h3>
+          <p>입력 → 정규화 → DL 보조(옵션) → 혼합 → 이상·무임승차·내보내기. 학습 데이터 누적 on/off.</p>
+          <button type="button" class="btn btn-primary btn-block" data-view="team">열기</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">과정·시험</span>
+          <h3>학습 과정 vs 시험 불일치</h3>
+          <p>LMS·과제와 시험 점수 불균형을 참고용으로 요약합니다.</p>
+          <button type="button" class="btn btn-ghost btn-block" data-view="analyze">불일치 분석</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">조기 경보</span>
+          <h3>학습 이탈 신호</h3>
+          <p>출석·과제 비율 기반 위험/정상 판정 초안.</p>
+          <button type="button" class="btn btn-ghost btn-block" data-view="at-risk">이탈 신호</button>
+        </article>
+        <article class="solution-tile solution-tile--live hud-card">
+          <span class="solution-badge solution-badge--on">채점 보조</span>
+          <h3>피드백·루브릭</h3>
+          <p>피드백·루브릭 초안 및 정합성 점검.</p>
+          <button type="button" class="btn btn-ghost btn-block" data-view="hub">기타 분석 허브</button>
+        </article>
+      </div>
+    </section>
+
+    <section class="section-block hud-section" aria-labelledby="home-flow-title">
+      <h2 id="home-flow-title" class="section-title">폼에서 하는 일</h2>
+      <div class="grid-2 home-flow-grid home-flow-grid--2">
+        <div class="panel hud-panel home-flow-card">
+          <p class="home-flow-step">1</p>
+          <h3 class="subh">데이터 입력</h3>
+          <p class="muted small">프로젝트·멤버·지표를 폼에 넣습니다. 상단 스트립으로 API 연결을 확인합니다.</p>
+        </div>
+        <div class="panel hud-panel home-flow-card">
+          <p class="home-flow-step">2</p>
+          <h3 class="subh">DL 옵션</h3>
+          <p class="muted small">딥러닝 보조 사용 여부·이번 요청을 학습 풀에 넣을지(추론만) 선택합니다.</p>
+        </div>
+        <div class="panel hud-panel home-flow-card">
+          <p class="home-flow-step">3</p>
+          <h3 class="subh">실행·혼합</h3>
+          <p class="muted small">서버가 Rule·DL·판단·(선택) LLM을 실행하고 혼합 점수와 리포트를 돌려줍니다.</p>
+        </div>
+        <div class="panel hud-panel home-flow-card">
+          <p class="home-flow-step">4</p>
+          <h3 class="subh">내보내기</h3>
+          <p class="muted small">JSON·요약 복사·인쇄·OpenAPI 연동으로 기록·재현에 활용합니다.</p>
+        </div>
+      </div>
     </section>
   </div>`;
 }
 
 function hubHtml(): string {
   return `
-  <div class="page page-animate home-page">
+  <div class="page home-page">
     <section class="section-block hud-section home-section">
-      <h2 class="section-title">부가 분석 (평가 보조)</h2>
-      <p class="muted small" style="margin:-0.5rem 0 1rem;">팀 평가와 별도로, 과정·시험 불일치·이탈 신호 등을 점검합니다.</p>
+      <h2 class="section-title">부가 화면</h2>
+      <p class="muted small" style="margin:-0.5rem 0 1rem;">팀 평가와 분리된 분석·초안 도구입니다.</p>
       <div class="analysis-flow">
         <article class="solution-tile solution-tile--live hud-card analysis-step">
           <span class="solution-badge solution-badge--on">1. 과정 vs 시험 불일치</span>
@@ -1870,12 +2425,93 @@ function teamMemberBlock(i: number, m: TeamMemberRow): string {
     <textarea class="txt" id="tm_self_${i}" rows="2">${escapeHtml(m.self_report)}</textarea>
     <label class="lbl">동료 메모</label>
     <textarea class="txt" id="tm_peer_${i}" rows="2">${escapeHtml(m.peer_notes)}</textarea>
+    <details class="timeline-details" style="margin-top:0.5rem;">
+      <summary>교육자 무임승차 오버라이드 (선택)</summary>
+      <p class="muted small">통합 평가(<code class="mono-input">POST /api/team/evaluate</code>) 실행 시 화면용 플래그·위험도에만 반영됩니다. Rule 상세 리포트는 서버가 그대로 둡니다.</p>
+      <div class="grid-2">
+        <div>
+          <label class="lbl">오버라이드</label>
+          <select class="txt" id="tm_fr_override_${i}">
+            <option value="none" ${m.instructor_freerider_override === "none" ? "selected" : ""}>미사용</option>
+            <option value="clear_suspicion" ${m.instructor_freerider_override === "clear_suspicion" ? "selected" : ""}>의심 해제</option>
+            <option value="confirm_suspicion" ${m.instructor_freerider_override === "confirm_suspicion" ? "selected" : ""}>의심 유지·강조</option>
+          </select>
+        </div>
+        <div>
+          <label class="lbl">사유 메모 (선택)</label>
+          <input class="txt" id="tm_fr_note_${i}" maxlength="500" placeholder="면담·로그 확인 등" value="${escapeHtml(m.instructor_override_note)}" />
+        </div>
+      </div>
+    </details>
   </div>`;
+}
+
+function teamReportLlmAssistLine(rep: TeamUnifiedReport): string {
+  const m = rep.dl_model_info;
+  if (!m || typeof m !== "object") return "";
+  const la = (m as Record<string, unknown>)["llm_assist"] as
+    | {
+        applied?: boolean;
+        enabled?: boolean;
+        blend_weight?: number;
+        provider?: string;
+        model?: string;
+        reason?: string;
+      }
+    | undefined;
+  if (!la) return "";
+  if (la.applied === true) {
+    const prov = la.provider != null ? String(la.provider) : "";
+    const mod = la.model != null ? String(la.model) : "";
+    const pct =
+      typeof la.blend_weight === "number" && Number.isFinite(la.blend_weight)
+        ? Math.round(la.blend_weight * 100)
+        : null;
+    return `<p class="muted small">LLM 정렬(DL 혼합 레이어): ${escapeHtml(prov)} / ${escapeHtml(mod)}${
+      pct != null ? ` · 혼합 가중 ${pct}%` : ""
+    }</p>`;
+  }
+  if (la.enabled === true && la.applied === false) {
+    return `<p class="muted small">LLM 정렬 시도: 미적용 (${escapeHtml(String(la.reason ?? ""))})</p>`;
+  }
+  return "";
+}
+
+function teamReportResearchEvidenceLine(rep: TeamUnifiedReport): string {
+  const m = rep.dl_model_info;
+  if (!m || typeof m !== "object") return "";
+  const rv = (m as Record<string, unknown>)["research_evidence"] as
+    | {
+        active?: boolean;
+        blend_weight?: number;
+        z_trim?: number;
+        path?: string | null;
+        source?: { title?: string; doi?: string };
+        note_ko?: string | null;
+        reason?: string;
+      }
+    | undefined;
+  if (!rv || !rv.active) return "";
+  const title =
+    rv.source && typeof rv.source === "object" && rv.source.title != null
+      ? String(rv.source.title)
+      : "";
+  const doi =
+    rv.source && typeof rv.source === "object" && rv.source.doi != null ? String(rv.source.doi) : "";
+  const bw =
+    typeof rv.blend_weight === "number" && Number.isFinite(rv.blend_weight)
+      ? Math.round(rv.blend_weight * 100)
+      : null;
+  const head = title ? `${escapeHtml(title)}` : "연구 normative 프로파일";
+  return `<p class="muted small">연구·논문 분포 정합: ${head}${
+    doi ? ` · DOI ${escapeHtml(doi)}` : ""
+  }${bw != null ? ` · DL 혼합 가중 ${bw}%` : ""}</p>`;
 }
 
 function teamReportHtml(): string {
   const rep = state.team.report;
   if (!rep) return "";
+  const dlMode = isDlReport(rep);
   const n = rep.scores.length || 1;
   const log = rep.evaluation_log as { request_id?: string; timestamp?: string };
   const meta = [log.request_id ? `요청 ${escapeHtml(log.request_id)}` : "", log.timestamp ? escapeHtml(log.timestamp) : ""]
@@ -1898,27 +2534,9 @@ function teamReportHtml(): string {
       const strengths = (an?.strengths || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
       const weaknesses = (an?.weaknesses || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
       const rec = (an?.recommended_actions || []).map((x) => `<li>${escapeHtml(x)}</li>`).join("");
-      return `
-  <article class="report-member-flow hud-panel">
-    <header class="report-member-head">
-      <h3 class="subh">${escapeHtml(s.member_name)}</h3>
-      <p class="report-summary-line"><strong>기여도(정규화)</strong> ${s.normalizedScore.toFixed(0)}점 · <strong>순위</strong> ${s.rank}/${n} (상위 ${s.top_percent.toFixed(1)}%)</p>
-      ${
-        s.dl_score != null && s.blendedScore != null
-          ? `<p class="muted small"><strong>DL 보강</strong> ${s.dl_score.toFixed(1)} · <strong>최종 혼합</strong> ${s.blendedScore.toFixed(1)} ${s.dl_confidence != null ? `(신뢰도 ${s.dl_confidence.toFixed(1)})` : ""}</p>`
-          : ""
-      }
-      ${
-        s.dl_top_factors?.length
-          ? `<p class="muted small">DL 영향 요인: ${escapeHtml(s.dl_top_factors.join(", "))}</p>`
-          : ""
-      }
-      <p class="muted small">팀 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%</p>
-      ${trust != null ? `<p class="report-trust"><strong>데이터 신뢰도</strong> <span class="score-num">${trust.toFixed(0)}</span>% <span class="muted small">(Git ${rel.git_ratio_percent.toFixed(0)}% / 자기서술 ${rel.self_report_ratio_percent.toFixed(0)}%)</span></p>` : ""}
-      ${rel.note ? `<p class="muted small">⚠️ ${escapeHtml(rel.note)}</p>` : ""}
-    </header>
+      const secRule = `
     <section class="report-section">
-      <h4 class="report-h4">점수 근거 (Score Engine)</h4>
+      <h4 class="report-h4">${dlMode ? "Rule 피처 환산 근거" : "점수 근거 (Rule · DL 보조)"}</h4>
       <ul class="report-breakdown">
         <li>커밋: ${p.commits.toFixed(2)}점 (기준값 ${b.commits.toFixed(1)})</li>
         <li>PR: ${p.prs.toFixed(2)}점 (기준값 ${b.prs.toFixed(1)})</li>
@@ -1927,11 +2545,13 @@ function teamReportHtml(): string {
         <li>자기서술: ${p.self_report.toFixed(2)}점 (기준값 ${b.self_report.toFixed(1)})</li>
       </ul>
       <p class="muted small">환산 raw ${s.rawScore.toFixed(2)}</p>
-    </section>
-    <section class="report-section">
-      <h4 class="report-h4">이상 감지 (규칙)</h4>
+    </section>`;
+      const secFlags = `
+    <section class="report-section ${dlMode ? "report-section--dl-inspect" : ""}">
+      <h4 class="report-h4">${dlMode ? "검사 요약 (DL·혼합·규칙)" : "이상 감지 (규칙)"}</h4>
       ${flags}
-    </section>
+    </section>`;
+      const secAi = `
     <section class="report-section report-ai">
       <h4 class="report-h4">AI 분석 (설명)</h4>
       <p class="prose">${escapeHtml(an?.summary || "")}</p>
@@ -1945,14 +2565,64 @@ function teamReportHtml(): string {
         <div><strong>강점</strong><ul>${strengths}</ul></div>
         <div><strong>개선</strong><ul>${weaknesses}</ul></div>
       </div>
-    </section>
+    </section>`;
+      const secRec = `
     <section class="report-section">
       <h4 class="report-h4">추천 행동</h4>
       <ul>${rec}</ul>
-    </section>
+    </section>`;
+      const mid = dlMode ? `${secFlags}${secRule}` : `${secRule}${secFlags}`;
+      return `
+  <article class="report-member-flow hud-panel">
+    <header class="report-member-head ${dlMode ? "report-member-head--dl" : ""}">
+      <h3 class="subh">${escapeHtml(s.member_name)}</h3>
+      ${
+        dlMode && s.dl_score != null && s.blendedScore != null
+          ? `<p class="report-dl-line"><strong>DL 보조</strong> ${s.dl_score.toFixed(1)} · <strong>혼합</strong> ${s.blendedScore.toFixed(1)}${
+              s.dl_confidence != null ? ` · <strong>DL 신뢰도</strong> ${s.dl_confidence.toFixed(1)}` : ""
+            }</p>
+      <p class="report-summary-line muted small"><strong>Rule 정규화</strong> ${s.normalizedScore.toFixed(0)}점 · 순위 ${s.rank}/${n} (상위 ${s.top_percent.toFixed(1)}%)</p>`
+          : `<p class="report-summary-line"><strong>기여도(정규화)</strong> ${s.normalizedScore.toFixed(0)}점 · <strong>순위</strong> ${s.rank}/${n} (상위 ${s.top_percent.toFixed(1)}%)</p>${
+              s.dl_score != null && s.blendedScore != null
+                ? `<p class="muted small"><strong>DL 보강</strong> ${s.dl_score.toFixed(1)} · <strong>최종 혼합</strong> ${s.blendedScore.toFixed(1)} ${
+                    s.dl_confidence != null ? `(신뢰도 ${s.dl_confidence.toFixed(1)})` : ""
+                  }</p>`
+                : ""
+            }`
+      }
+      ${
+        s.dl_top_factors?.length
+          ? `<p class="muted small">DL 영향 요인: ${escapeHtml(s.dl_top_factors.join(", "))}</p>`
+          : ""
+      }
+      ${
+        s.external_benchmark_score != null && Number.isFinite(s.external_benchmark_score)
+          ? `<p class="muted small">외부 벤치 정렬: <strong>${s.external_benchmark_score.toFixed(1)}</strong> / 100 (JSON 기대값 대비·추론만)</p>`
+          : ""
+      }
+      ${
+        s.llm_alignment_score != null && Number.isFinite(s.llm_alignment_score)
+          ? `<p class="muted small">LLM 정렬(참고): <strong>${s.llm_alignment_score.toFixed(1)}</strong> / 100</p>`
+          : ""
+      }
+      ${
+        s.research_alignment_score != null && Number.isFinite(s.research_alignment_score)
+          ? `<p class="muted small">연구 분포 정합(참고): <strong>${s.research_alignment_score.toFixed(1)}</strong> / 100</p>`
+          : ""
+      }
+      <p class="muted small">팀 평균 대비 ${s.pct_vs_team_mean >= 0 ? "+" : ""}${s.pct_vs_team_mean.toFixed(1)}%</p>
+      ${trust != null ? `<p class="report-trust"><strong>데이터 신뢰도</strong> <span class="score-num">${trust.toFixed(0)}</span>% <span class="muted small">(Git ${rel.git_ratio_percent.toFixed(0)}% / 자기서술 ${rel.self_report_ratio_percent.toFixed(0)}%)</span></p>` : ""}
+      ${rel.note ? `<p class="muted small">⚠️ ${escapeHtml(rel.note)}</p>` : ""}
+    </header>
+    ${mid}
+    ${secAi}
+    ${secRec}
   </article>`;
     })
     .join("");
+  const flowLead = dlMode
+    ? "입력 → Rule 피처 → DL 모델·검사 → 혼합 → (선택) 서술"
+    : "입력 → Rule → 이상 탐지 → (선택) 서술";
   return `
   <section class="panel panel-result hud-panel team-report-root team-print-root" id="team-printable-root">
     <div class="result-toolbar no-print" role="toolbar">
@@ -1962,13 +2632,15 @@ function teamReportHtml(): string {
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-copy-summary">요약 복사</button>
       <button type="button" class="btn btn-ghost btn-sm" id="btn-team-print">인쇄·PDF</button>
     </div>
-    <h2>팀 기여도 평가 리포트</h2>
-    <p class="muted small">데이터 → Score Engine → Anomaly → AI 설명 (점수는 AI가 매기지 않음)</p>
+    <h2>리포트</h2>
+    <p class="muted small">${flowLead}</p>
     ${
       rep.dl_model_info
         ? `<p class="muted small">DL 보강 모델: ${escapeHtml(String(rep.dl_model_info.model_name ?? "enabled"))} · 혼합식 ${escapeHtml(String(rep.dl_model_info.blend_formula ?? "dynamic blend"))}</p>`
         : ""
     }
+    ${teamReportLlmAssistLine(rep)}
+    ${teamReportResearchEvidenceLine(rep)}
     ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
     ${
       rep.team_narrative?.trim()
@@ -1980,6 +2652,7 @@ function teamReportHtml(): string {
         : ""
     }
     ${promotionGateBannerHtml(rep)}
+    ${priorCalibrationPanelHtml(rep)}
     ${dlExplainOpsPanelHtml(rep)}
     ${confidenceGateHtml(rep)}
     ${promotionGateHtml(rep)}
@@ -1993,26 +2666,105 @@ function teamReportHtml(): string {
   </section>`;
 }
 
+function teamHolisticHtml(): string {
+  if (state.team.holistic_loading) {
+    return `
+  <section class="panel hud-panel team-holistic-panel" aria-live="polite" aria-busy="true">
+    <h3 class="subh">통합 평가</h3>
+    <p class="muted small"><code class="mono-input">POST /api/team/evaluate</code> 처리 중…</p>
+  </section>`;
+  }
+  if (state.team.holistic_error) {
+    return `
+  <section class="panel hud-panel team-holistic-panel">
+    <h3 class="subh">통합 평가</h3>
+    <p class="err">${escapeHtml(state.team.holistic_error)}</p>
+  </section>`;
+  }
+  const h = state.team.holistic;
+  if (!h) return "";
+
+  const meta = [h.request_id ? `요청 ${escapeHtml(h.request_id)}` : "", h.generated_at ? escapeHtml(h.generated_at) : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const rows = h.members
+    .map((m) => {
+      const sus = m.free_rider_suspected ? "의심" : "없음";
+      const risk = m.free_rider_risk != null ? m.free_rider_risk.toFixed(1) : "—";
+      const ov = m.instructor_freerider_override && m.instructor_freerider_override !== "none" ? m.instructor_freerider_override : "none";
+      const eff = (m.freerider_override_effect_ko ?? "").trim();
+      return `<tr>
+        <td>${escapeHtml(m.name)}</td>
+        <td>${escapeHtml(sus)}</td>
+        <td>${escapeHtml(risk)}</td>
+        <td class="muted small">${escapeHtml(ov)}</td>
+        <td class="muted small">${eff ? escapeHtml(eff) : "—"}</td>
+      </tr>`;
+    })
+    .join("");
+  const overview = h.freerider_detection_overview
+    ? `<p class="muted small">${escapeHtml(h.freerider_detection_overview)}</p>`
+    : "";
+  const summary = h.free_rider_summary ? `<p class="prose">${escapeHtml(h.free_rider_summary)}</p>` : "";
+
+  return `
+  <section class="panel hud-panel team-holistic-panel" aria-labelledby="team-holistic-title">
+    <div class="result-toolbar no-print" role="toolbar">
+      <button type="button" class="btn btn-ghost btn-sm" id="btn-team-holistic-export">통합 평가 JSON</button>
+    </div>
+    <h3 id="team-holistic-title" class="subh">통합 평가 (무임승차·루브릭)</h3>
+    <p class="muted small">리포트(<code class="mono-input">/api/team/report</code>)와 별도 엔드포인트입니다. 멤버 카드의 <strong>교육자 오버라이드</strong>는 여기에 반영됩니다.</p>
+    ${meta ? `<p class="result-meta muted small no-print">${meta}</p>` : ""}
+    ${summary}
+    ${overview}
+    <div class="table-wrap" style="margin-top:0.75rem;">
+      <table class="data-table">
+        <thead><tr><th>이름</th><th>무임승차(화면)</th><th>위험도</th><th>오버라이드</th><th>반영 설명</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${h.disclaimer ? `<p class="footer-note muted small">${escapeHtml(h.disclaimer)}</p>` : ""}
+  </section>`;
+}
+
 
 function teamHtml(): string {
   const blocks = state.team.members.map((m, i) => teamMemberBlock(i, m)).join("");
   return `
-  <div class="page page-analyze page-animate analyze-page">
-    <p class="eyebrow eyebrow--shine">Team fairness · 기여도 평가</p>
-    <h1 class="page-title page-title--hero">팀 프로젝트 공정성 — 자동 기여도 평가</h1>
+  <div class="page page-analyze analyze-page team-dl-page">
+    <p class="eyebrow">Team evaluation</p>
+    <h1 class="page-title page-title--hero">팀 기여도 평가</h1>
     <p class="lead analyze-lead">
-      Git 기반 팀 데이터로 <strong>공정한 기여도</strong>를 정량·정성으로 평가하고, <strong>설명 가능한 리포트</strong>를 만듭니다.
-      <strong>계산(Score Engine) · 판단(Anomaly) · 설명(AI)</strong>을 분리했습니다. AI는 점수를 매기지 않습니다.
+      정량은 전부 서버에서 결정됩니다: 팀 기준 정규화(Rule) → 저장된 가중치로 보조 점수(dl, 선형 폴백 가능) → 혼합(blended) → 규칙 기반 플래그.
+      LLM은 요약·문장 설명만 붙이며, 키가 없으면 생략됩니다.
     </p>
     <section class="panel hud-panel team-arch-panel">
-      <h3 class="subh">아키텍처 (계산 / 판단 / 설명 분리)</h3>
-      <div class="team-arch-grid">
-        <article class="team-arch-step"><strong>Score Engine</strong><p class="muted small">커밋·PR·라인·출석·자기서술을 팀 중앙값 대비 정규화해 가중 합산합니다. AI 미사용.</p></article>
-        <article class="team-arch-step"><strong>Anomaly Detector</strong><p class="muted small">3~4개 규칙으로 이상 패턴만 표시합니다. AI 미사용.</p></article>
-        <article class="team-arch-step"><strong>AI Analyzer</strong><p class="muted small">정량 결과·팀 비교·플래그를 바탕으로 요약·강점·개선·행동만 서술합니다.</p></article>
+      <h3 class="subh">구성</h3>
+      <div class="team-arch-grid team-arch-grid--dl">
+        <article class="team-arch-step"><strong>① 피처·Rule</strong><p class="muted small">집계 지표 정규화, 순위, 신뢰도.</p></article>
+        <article class="team-arch-step team-arch-step--highlight"><strong>② DL</strong><p class="muted small">배포된 모델로 보조 점수·불확실도. 미배포 시 선형/스킵.</p></article>
+        <article class="team-arch-step"><strong>③ 혼합·탐지</strong><p class="muted small">가중 합성, 무임승차·불일치·그래프.</p></article>
+        <article class="team-arch-step"><strong>④ LLM</strong><p class="muted small">선택. 서술만.</p></article>
       </div>
     </section>
     <p class="muted small team-practice-hint">입력 내용은 브라우저에 <strong>자동 임시 저장</strong>됩니다(성공적으로 평가하면 삭제). 조교·기록용으로 JSON 내보내기·요약 복사를 활용하세요.</p>
+
+    <section class="panel hud-panel team-dl-panel team-dl-panel--primary" aria-labelledby="team-dl-title">
+      <h3 id="team-dl-title" class="subh">모델 옵션</h3>
+      <p class="muted small team-dl-hint">
+        DL·ML 보조를 끄면 Rule만 반환합니다. 학습 누적을 끄면 이번 입력은 추론에만 쓰이고 샘플 풀에는 넣지 않습니다.
+        서버에 <code class="mono-input">TEAM_WEB_PRIORS_FILE</code> / <code class="mono-input">TEAM_WEB_PRIORS_URL</code> 을 켜 두면 리포트에 «외부·벤치마크 priors 보정» 요약이 붙습니다.
+        JSON에서 <code class="mono-input">benchmark_inference.enabled=true</code> 이거나 <code class="mono-input">TEAM_BENCHMARK_INFERENCE_ENABLED=1</code> 이면 외부 기대값 대비 정렬 점수를 NN 점수와 혼합합니다(추가 학습 없음).
+      </p>
+      <label class="lbl team-dl-check">
+        <input type="checkbox" id="team_use_dl" ${state.team.use_deep_learning ? "checked" : ""} />
+        <span>딥러닝·ML 보조 점수 사용 (<code class="mono-input">dl_score</code> · 혼합)</span>
+      </label>
+      <label class="lbl team-dl-check" style="margin-top:0.45rem;${state.team.use_deep_learning ? "" : "opacity:0.55;"}">
+        <input type="checkbox" id="team_dl_accumulate" ${state.team.deep_learning_accumulate_samples ? "checked" : ""} ${state.team.use_deep_learning ? "" : "disabled"} />
+        <span>이번 평가를 학습 데이터에 반영 (끄면 <strong>추론만</strong> — 입력이 누적·재학습에 쓰이지 않음)</span>
+      </label>
+    </section>
 
     <section class="panel hud-panel team-form-panel">
       <div class="grid-2">
@@ -2033,7 +2785,10 @@ function teamHtml(): string {
         <button type="button" class="btn btn-ghost" id="btn-team-add">멤버 추가</button>
         <button type="button" class="btn btn-ghost" id="btn-team-remove" ${state.team.members.length <= 1 ? "disabled" : ""}>마지막 멤버 제거</button>
         <button type="button" class="btn btn-primary" id="btn-team-run" ${state.team.loading ? "disabled" : ""}>
-          ${state.team.loading ? "자동 평가 중…" : "자동 평가 실행"}
+          ${state.team.loading ? "처리 중…" : "실행"}
+        </button>
+        <button type="button" class="btn btn-ghost" id="btn-team-holistic" ${state.team.loading || state.team.holistic_loading ? "disabled" : ""}>
+          ${state.team.holistic_loading ? "통합 평가 중…" : "통합 평가 (무임승차)"}
         </button>
       </div>
       ${state.team.error ? `<p class="err">${escapeHtml(state.team.error)}</p>` : ""}
@@ -2044,11 +2799,16 @@ function teamHtml(): string {
       <div class="skeleton-line skeleton-line--long"></div>
       <div class="skeleton-line"></div>
       <div class="skeleton-line skeleton-line--med"></div>
-      <p class="muted small">다중 분석·피드백 생성 중입니다. 팀 규모·API에 따라 수십 초 걸릴 수 있습니다.</p>
+      <p class="muted small">${
+        state.team.use_deep_learning
+          ? "Rule·DL 모델 평가와 리포트를 생성하는 중입니다. 규모에 따라 지연될 수 있습니다."
+          : "Rule 평가와 리포트를 생성하는 중입니다. 규모에 따라 지연될 수 있습니다."
+      }</p>
     </div>`
         : ""
     }
     ${teamReportHtml()}
+    ${teamHolisticHtml()}
   </div>`;
 }
 
@@ -2079,7 +2839,7 @@ function atRiskResultHtml(): string {
 
 function atRiskHtml(): string {
   return `
-  <div class="page page-animate analyze-page">
+  <div class="page analyze-page">
     <p class="eyebrow">조기 경보</p>
     <h1 class="page-title">학습 이탈 신호</h1>
     <p class="lead analyze-lead">LMS에서 가져올 수 있는 <strong>출석 비율</strong>과 <strong>과제 제출 비율</strong>만 넣으면 결과는 <strong>정상 / 위험</strong> 두 단계로 표시됩니다.</p>
@@ -2126,7 +2886,7 @@ function feedbackHtml(): string {
   </section>`
     : "";
   return `
-  <div class="page page-animate analyze-page">
+  <div class="page analyze-page">
     <p class="eyebrow">과제</p>
     <h1 class="page-title">피드백 초안 생성</h1>
     <p class="lead analyze-lead"><code>OPENAI_API_KEY</code>가 필요합니다.</p>
@@ -2190,7 +2950,7 @@ function rubricAlignHtml(): string {
   </section>`
     : "";
   return `
-  <div class="page page-animate analyze-page">
+  <div class="page analyze-page">
     <p class="eyebrow">채점 품질</p>
     <h1 class="page-title">루브릭·채점 근거 일치 점검</h1>
     <p class="lead analyze-lead">학습 목표에서 <strong>루브릭 초안</strong>을 만들거나, 기존 루브릭과 채점 코멘트의 <strong>정합성</strong>을 점검할 수 있습니다. OpenAI가 있으면 서술 품질이 올라갑니다.</p>
@@ -2307,7 +3067,7 @@ function resultSectionHtml(): string {
 
 function analyzeHtml(): string {
   return `
-  <div class="page page-animate analyze-page">
+  <div class="page analyze-page">
     <p class="eyebrow">보조 · 과정 vs 시험</p>
     <h1 class="page-title">과정 지표와 시험 점수</h1>
     <p class="lead analyze-lead">LMS·과제 지표와 시험 점수를 넣으면 <strong>불일치 방향</strong>을 참고용으로 요약합니다.</p>
@@ -2404,6 +3164,8 @@ function mainContentHtml(): string {
 }
 
 let renderRafId = 0;
+/** document/window 리스너는 한 번만 등록(renderSync 가 자주 호출됨) */
+let globalUiListenersWired = false;
 
 /** 즉시 DOM 반영 — 로딩 표시·비동기 완료 후에는 이쪽(다음 프레임 지연 없음) */
 function renderSync(): void {
@@ -2414,10 +3176,11 @@ function renderSync(): void {
   const app = document.getElementById("app");
   if (!app) return;
   app.innerHTML = `
-  <div class="app-shell app-shell--fx">
+  <a class="skip-link" href="#site-main">본문으로 건너뛰기</a>
+  <div class="app-shell">
     ${navHtml()}
     ${connectionStripHtml()}
-    <main class="site-main site-main--fx">${mainContentHtml()}</main>
+    <main class="site-main" id="site-main" tabindex="-1">${mainContentHtml()}</main>
     ${footerHtml()}
   </div>`;
   wire();
@@ -2475,9 +3238,10 @@ function setView(v: SiteView): void {
   if (location.hash !== nextHash) {
     history.replaceState(null, "", `${location.pathname}${location.search}${nextHash}`);
   }
-  void refreshHealth(true).then(() => {
-    renderSync();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+  renderSync();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  void refreshHealth(true).then((changed) => {
+    if (changed) renderSync();
   });
 }
 
@@ -2524,8 +3288,33 @@ function wire(): void {
     void submitTeam();
   });
 
+  document.getElementById("btn-team-holistic")?.addEventListener("click", () => {
+    void submitTeamHolistic();
+  });
+
+  document.getElementById("btn-team-holistic-export")?.addEventListener("click", () => {
+    const h = state.team.holistic;
+    if (!h) return;
+    const safe = (state.team.project_name || "team-holistic").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+    downloadJsonExport(`${safe}-evaluate`, h);
+  });
+
+  document.getElementById("team_use_dl")?.addEventListener("change", (e) => {
+    const on = (e.target as HTMLInputElement).checked;
+    state.team.use_deep_learning = on;
+    if (!on) state.team.deep_learning_accumulate_samples = false;
+    renderSync();
+    scheduleTeamDraftSave();
+  });
+  document.getElementById("team_dl_accumulate")?.addEventListener("change", (e) => {
+    state.team.deep_learning_accumulate_samples = (e.target as HTMLInputElement).checked;
+    renderSync();
+    scheduleTeamDraftSave();
+  });
+
   document.querySelector(".team-form-panel")?.addEventListener("input", scheduleTeamDraftSave);
   document.querySelector(".team-form-panel")?.addEventListener("change", scheduleTeamDraftSave);
+  document.querySelector(".team-dl-panel")?.addEventListener("change", scheduleTeamDraftSave);
 
   document.getElementById("btn-team-export-json")?.addEventListener("click", () => {
     const r = state.team.report;
@@ -2652,16 +3441,23 @@ function wire(): void {
     downloadJsonExport("analyze-learning-exam", state.result);
   });
 
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      void refreshHealth(true).then(() => renderSync());
-    }
-  });
+  if (!globalUiListenersWired) {
+    globalUiListenersWired = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        void refreshHealth(true).then((changed) => {
+          if (changed) renderSync();
+        });
+      }
+    });
 
-  window.addEventListener("online", () => {
-    connectionUnstable = false;
-    void refreshHealth(true).then(() => renderSync());
-  });
+    window.addEventListener("online", () => {
+      connectionUnstable = false;
+      void refreshHealth(true).then((changed) => {
+        if (changed) renderSync();
+      });
+    });
+  }
 }
 
 /** URL 해시로 뷰 복원  해시 없으면 홈. */
@@ -2683,10 +3479,25 @@ function applyHashRouteOnce(): void {
 
 /** 백엔드 health 전에도 셸을 먼저 그려 빈 화면을 막음 */
 function boot(): void {
-  applyHashRouteOnce();
-  renderSync();
-  startHealthKeepAlive();
-  void refreshHealth(true).then(() => renderSync());
+  try {
+    applyHashRouteOnce();
+    renderSync();
+    startHealthKeepAlive();
+    void refreshHealth(true).then((changed) => {
+      if (changed) renderSync();
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const app = document.getElementById("app");
+    if (app) {
+      app.innerHTML = `<div class="app-shell" style="padding:1.5rem;font-family:system-ui,sans-serif;max-width:40rem">
+        <h1 style="font-size:1.1rem">프론트 실행 오류</h1>
+        <p>페이지 스크립트에서 예외가 났습니다. 개발자 도구(F12) → Console 을 확인하세요.</p>
+        <pre style="overflow:auto;background:#1a1d26;padding:0.75rem;border-radius:6px;font-size:12px">${escapeHtml(msg)}</pre>
+      </div>`;
+    }
+    console.error(e);
+  }
 }
 
 if (document.readyState === "loading") {

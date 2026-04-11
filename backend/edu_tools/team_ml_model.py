@@ -252,6 +252,50 @@ FP_RING_PATH = DATA_DIR / "team_ml_fp_ring.json"
 FP_RING_MAX = 8192
 
 
+def _fp_ring_max() -> int:
+    """대용량 적재 시 중복 링 크기(TEAM_APPEND_FP_RING_MAX, 기본 8192)."""
+    raw = (os.environ.get("TEAM_APPEND_FP_RING_MAX") or "").strip()
+    if not raw:
+        return FP_RING_MAX
+    try:
+        return max(1024, min(int(raw), 2_000_000))
+    except ValueError:
+        return FP_RING_MAX
+
+
+def _dataset_stats_max_lines() -> int:
+    raw = (os.environ.get("TEAM_DATASET_STATS_MAX_LINES") or "1000000").strip()
+    try:
+        return max(1000, min(int(raw), 10_000_000))
+    except ValueError:
+        return 1_000_000
+
+
+def _auto_reservoir_enabled() -> bool:
+    return (os.environ.get("TEAM_TRAIN_AUTO_RESERVOIR", "1") or "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _auto_reservoir_line_threshold() -> int:
+    raw = (os.environ.get("TEAM_TRAIN_AUTO_RESERVOIR_LINE_THRESHOLD") or "25000").strip()
+    try:
+        return max(500, int(raw))
+    except ValueError:
+        return 25_000
+
+
+def _auto_reservoir_cap() -> int:
+    raw = (os.environ.get("TEAM_TRAIN_RESERVOIR_MAX_AUTO") or "500000").strip()
+    try:
+        return max(5000, min(int(raw), 5_000_000))
+    except ValueError:
+        return 500_000
+
+
 def _append_fingerprint(row: dict) -> str:
     x = row.get("x")
     y = float(row.get("y", 0.0))
@@ -272,7 +316,9 @@ def _fp_ring_load() -> list[str]:
     try:
         raw = json.loads(FP_RING_PATH.read_text(encoding="utf-8"))
         if isinstance(raw, dict) and isinstance(raw.get("fingerprints"), list):
-            return [str(x) for x in raw["fingerprints"] if isinstance(x, str)]
+            ring = [str(x) for x in raw["fingerprints"] if isinstance(x, str)]
+            cap = _fp_ring_max()
+            return ring[-cap:] if len(ring) > cap else ring
     except Exception:
         pass
     return []
@@ -280,7 +326,7 @@ def _fp_ring_load() -> list[str]:
 
 def _fp_ring_save(ring: list[str]) -> None:
     _ensure_data_dir()
-    ring = ring[-FP_RING_MAX:]
+    ring = ring[-_fp_ring_max() :]
     FP_RING_PATH.write_text(
         json.dumps({"fingerprints": ring}, ensure_ascii=False),
         encoding="utf-8",
@@ -298,6 +344,7 @@ def append_samples(rows: list[dict]) -> dict[str, Any]:
     )
     ring = _fp_ring_load() if dedup else []
     ring_set = set(ring)
+    ring_cap = _fp_ring_max()
     written = 0
     skipped = 0
     with DATASET_PATH.open("a", encoding="utf-8") as f:
@@ -309,8 +356,8 @@ def append_samples(rows: list[dict]) -> dict[str, Any]:
                     continue
                 ring.append(fp)
                 ring_set.add(fp)
-                if len(ring) > FP_RING_MAX:
-                    ring = ring[-FP_RING_MAX:]
+                if len(ring) > ring_cap:
+                    ring = ring[-ring_cap:]
                     ring_set = set(ring)
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
             written += 1
@@ -325,7 +372,7 @@ def append_samples(rows: list[dict]) -> dict[str, Any]:
     }
 
 
-def dataset_label_streaming_stats(*, max_lines: int = 100_000) -> dict[str, Any]:
+def dataset_label_streaming_stats(*, max_lines: int | None = None) -> dict[str, Any]:
     """대용량 JSONL도 한 패스로 라벨(y) 분포 요약(수집 품질 모니터링)."""
     if not DATASET_PATH.is_file():
         return {
@@ -340,7 +387,8 @@ def dataset_label_streaming_stats(*, max_lines: int = 100_000) -> dict[str, Any]
     y_min = float("inf")
     y_max = float("-inf")
     ys_sample: list[float] = []
-    cap = max(100, min(int(max_lines), 500_000))
+    cap_src = int(max_lines) if max_lines is not None else _dataset_stats_max_lines()
+    cap = max(100, min(cap_src, 10_000_000))
     with DATASET_PATH.open(encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -512,8 +560,14 @@ def resolve_training_rows(
     ext_rows, ext_meta = load_external_training_rows()
     n_local = count_dataset_lines()
 
-    if reservoir_max > 0 and n_local > reservoir_max:
-        data = load_dataset_reservoir(reservoir_max, reservoir_seed)
+    auto_reservoir = False
+    eff_reservoir = int(reservoir_max)
+    if eff_reservoir <= 0 and _auto_reservoir_enabled() and n_local > _auto_reservoir_line_threshold():
+        eff_reservoir = _auto_reservoir_cap()
+        auto_reservoir = True
+
+    if eff_reservoir > 0 and n_local > eff_reservoir:
+        data = load_dataset_reservoir(eff_reservoir, reservoir_seed)
     else:
         data = load_dataset()
 
@@ -534,8 +588,9 @@ def resolve_training_rows(
         ext_info["external_rows_attempted"] = len(ext_rows)
         ext_info["dedupe_dropped"] = dedup_drop
         ext_info["rows_after_merge"] = len(data)
-        if reservoir_max > 0 and len(data) > reservoir_max:
-            data = _reservoir_subsample_list(data, reservoir_max, reservoir_seed + 97_831)
+        merge_cap = eff_reservoir if eff_reservoir > 0 else reservoir_max
+        if merge_cap > 0 and len(data) > merge_cap:
+            data = _reservoir_subsample_list(data, merge_cap, reservoir_seed + 97_831)
             ext_info["reservoir_after_merge"] = True
     else:
         ext_info["merged"] = bool(ext_meta.get("enabled")) and not ext_meta.get("error")
@@ -549,6 +604,9 @@ def resolve_training_rows(
         "n_pool_local_lines": n_local,
         "n_pool_reported": n_pool,
         "external_train": ext_info,
+        "auto_reservoir": auto_reservoir,
+        "reservoir_max_env": int(reservoir_max),
+        "reservoir_cap_effective": eff_reservoir if auto_reservoir or eff_reservoir > 0 else None,
     }
     return data, n_pool, n_used
 

@@ -88,6 +88,8 @@ flowchart LR
 - `GET /api/observability` — 업타임·환경·런타임 메타 (관측성)
 - `GET /api/ready` · `GET /api/live` — 배포·K8s 스타일 헬스 프로브
 
+운영·보안·개인정보·이의제기 절차는 **`docs/OPERATIONS_AND_LIMITS.md`** 를 참고합니다.
+
 ---
 
 *본 문서는 제출물의 일부로, 실제 운영 시 기관 규정·개인정보 보호를 우선합니다.*

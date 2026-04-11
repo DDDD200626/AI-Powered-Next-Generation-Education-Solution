@@ -1,9 +1,4 @@
-# 방법 A — 백엔드(FastAPI) + 프론트(Vite) 개발 세팅만 수행합니다.
-# 사용: 저장소 루트에서
-#   powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
-# ClassPulse(Streamlit)까지 깔려면:
-#   powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -WithClassPulse
-
+# 방법 A — 백엔드(FastAPI) + 프론트(Vite) 개발 세팅
 param(
     [switch]$WithClassPulse
 )
@@ -12,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-Write-Host "== [방법 A] [1/3] Backend (Python) ==" -ForegroundColor Cyan
+Write-Host "== [1/3] Backend (Python) ==" -ForegroundColor Cyan
 Push-Location backend
 if (-not (Test-Path .env)) {
     Copy-Item .env.example .env
@@ -21,22 +16,21 @@ if (-not (Test-Path .env)) {
 python -m pip install -r requirements.txt
 Pop-Location
 
-Write-Host "== [방법 A] [2/3] Node (루트 + concurrently) ==" -ForegroundColor Cyan
+Write-Host "== [2/3] Node ==" -ForegroundColor Cyan
 npm install
 
-Write-Host "== [방법 A] [3/3] Frontend (Vite) ==" -ForegroundColor Cyan
+Write-Host "== [3/3] Frontend ==" -ForegroundColor Cyan
 npm run install:all
 
 if ($WithClassPulse) {
-    Write-Host "== [선택] ClassPulse (Streamlit) ==" -ForegroundColor Cyan
+    Write-Host "== [선택] ClassPulse ==" -ForegroundColor Cyan
     python -m pip install -r classpulse/requirements.txt
 }
 
 Write-Host ""
-Write-Host "방법 A 세팅 완료." -ForegroundColor Green
-Write-Host "  실행:  npm run dev"
-Write-Host "  웹:    http://127.0.0.1:5173"
-Write-Host "  API:   http://127.0.0.1:8000/docs"
-if (-not $WithClassPulse) {
-    Write-Host "  (ClassPulse: setup.ps1 -WithClassPulse 후 streamlit run classpulse/app.py)"
-}
+Write-Host "세팅 완료" -ForegroundColor Green
+Write-Host "  항상 주소 모드 설치: npm run always:on"
+Write-Host "  주소:                http://127.0.0.1:8000"
+Write-Host "  상태 확인:           npm run always:status"
+Write-Host "  중지/제거:           npm run always:off"
+Write-Host "  개발(HMR):           npm run dev"
